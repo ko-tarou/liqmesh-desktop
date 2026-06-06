@@ -8,8 +8,24 @@
 //! decodes to `None` (it is not silently downgraded to `Unknown`).
 //!
 //! JSON keys are camelCase to match the existing iOS/Android wire.
+//!
+//! roomId default (Contract v1.2/v1.3): a **missing** `roomId` key is restored
+//! to `"general"` via serde `default`; an **empty-string** `roomId` is mapped to
+//! `"general"` by [`Frame::normalized`]. No other default is permitted.
 
 use serde::{Deserialize, Serialize};
+
+/// The canonical default room id (Contract v1.2/v1.3): when `roomId` is **absent
+/// or empty**, every platform falls back to the literal string `"general"`.
+pub const DEFAULT_ROOM_ID: &str = "general";
+
+/// serde `default` for `room_id`: applied when the `roomId` key is **missing**
+/// from the wire JSON. (An *empty* `roomId` string is a present-but-blank value,
+/// which serde does not treat as missing — that case is handled by
+/// [`Frame::normalized`].)
+fn default_room_id() -> String {
+    DEFAULT_ROOM_ID.to_string()
+}
 
 /// A single logical wire frame, internally tagged by `type`.
 ///
@@ -34,6 +50,10 @@ pub enum Frame {
         sender_name: String,
         body: String,
         created_at: String,
+        /// roomId is optional-with-default per Contract v1.2/v1.3: a **missing**
+        /// `roomId` key restores to `"general"` via serde `default`; an **empty
+        /// string** is normalized to `"general"` by [`Frame::normalized`].
+        #[serde(default = "default_room_id")]
         room_id: String,
         /// Present only when this message is a reply.
         #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -57,6 +77,9 @@ pub enum Frame {
     /// Read receipt up to a given message in a room.
     #[serde(rename_all = "camelCase")]
     Read {
+        /// See [`Frame::Msg::room_id`]: missing → serde default `"general"`;
+        /// empty string → normalized to `"general"`.
+        #[serde(default = "default_room_id")]
         room_id: String,
         up_to_message_id: String,
         sender_id: String,
@@ -99,6 +122,55 @@ impl Frame {
             // Missing or unrecognized `type`: forward-compatible Unknown.
             _ => Some(Frame::Unknown),
         }
+    }
+
+    /// Returns the frame with its `roomId` canonicalized to the default room.
+    ///
+    /// serde `default` only fills in a `roomId` that was **missing** from the
+    /// wire; a present-but-**empty** string survives deserialization unchanged.
+    /// This applies the remaining half of the Contract v1.2/v1.3 rule: an empty
+    /// `roomId` on a [`Frame::Msg`] / [`Frame::Read`] becomes
+    /// [`DEFAULT_ROOM_ID`] (`"general"`). All other frames pass through
+    /// untouched.
+    pub fn normalized(self) -> Frame {
+        match self {
+            Frame::Msg {
+                id,
+                sender_id,
+                sender_name,
+                body,
+                created_at,
+                room_id,
+                reply_to_id,
+            } => Frame::Msg {
+                id,
+                sender_id,
+                sender_name,
+                body,
+                created_at,
+                room_id: normalize_room_id(room_id),
+                reply_to_id,
+            },
+            Frame::Read {
+                room_id,
+                up_to_message_id,
+                sender_id,
+            } => Frame::Read {
+                room_id: normalize_room_id(room_id),
+                up_to_message_id,
+                sender_id,
+            },
+            other => other,
+        }
+    }
+}
+
+/// Maps an empty `room_id` to [`DEFAULT_ROOM_ID`], leaving non-empty ids as-is.
+fn normalize_room_id(room_id: String) -> String {
+    if room_id.is_empty() {
+        default_room_id()
+    } else {
+        room_id
     }
 }
 
@@ -250,6 +322,69 @@ mod tests {
     fn malformed_json_returns_none() {
         assert_eq!(Frame::decode(b"not json at all"), None);
         assert_eq!(Frame::decode(b"{"), None);
+    }
+
+    #[test]
+    fn msg_missing_room_id_defaults_to_general() {
+        // roomId is optional-with-default (Contract v1.2): a missing key restores
+        // to "general" via serde `default`, NOT to None / a decode failure.
+        let json = br#"{"type":"msg","id":"m1","senderId":"u1","senderName":"A","body":"b","createdAt":"t"}"#;
+        match Frame::decode(json).expect("decode") {
+            Frame::Msg { room_id, .. } => assert_eq!(room_id, "general"),
+            other => panic!("expected Msg, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn read_missing_room_id_defaults_to_general() {
+        let json = br#"{"type":"read","upToMessageId":"m9","senderId":"u2"}"#;
+        match Frame::decode(json).expect("decode") {
+            Frame::Read { room_id, .. } => assert_eq!(room_id, "general"),
+            other => panic!("expected Read, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn other_missing_required_field_still_returns_none() {
+        // The roomId default must NOT loosen the rest of the schema: a `msg`
+        // missing a genuinely required field (e.g. `body`) is still a protocol
+        // violation and decodes to None.
+        let json = br#"{"type":"msg","id":"m1","senderId":"u1","senderName":"A","createdAt":"t","roomId":"r1"}"#;
+        assert_eq!(Frame::decode(json), None);
+    }
+
+    #[test]
+    fn normalized_maps_empty_room_id_to_general() {
+        // serde default only covers a *missing* key; an explicit empty string is
+        // canonicalized by normalized().
+        let f = Frame::Msg {
+            id: "m1".into(),
+            sender_id: "u1".into(),
+            sender_name: "A".into(),
+            body: "b".into(),
+            created_at: "t".into(),
+            room_id: "".into(),
+            reply_to_id: None,
+        }
+        .normalized();
+        match f {
+            Frame::Msg { room_id, .. } => assert_eq!(room_id, "general"),
+            other => panic!("expected Msg, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn normalized_leaves_nonempty_room_id_untouched() {
+        let f = Frame::Read {
+            room_id: "lobby".into(),
+            up_to_message_id: "m9".into(),
+            sender_id: "u2".into(),
+        }
+        .normalized();
+        match f {
+            Frame::Read { room_id, .. } => assert_eq!(room_id, "lobby"),
+            other => panic!("expected Read, got {other:?}"),
+        }
     }
 
     #[test]
