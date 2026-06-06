@@ -84,6 +84,32 @@ describe("applyFrame: msg", () => {
     expect(messagesIn(s, "r1").map((m) => m.id)).toEqual(["a", "m", "z"]);
   });
 
+  it("orders by epoch across differing valid timestamp formats (A#1)", () => {
+    let s = initialState;
+    // "+09:00" 08:00 == 23:00Z the day before -> must sort before the 00:00Z one.
+    s = applyFrame(s, msg({ id: "late", roomId: "r1", createdAt: "2026-06-06T00:00:00Z" }));
+    s = applyFrame(s, msg({ id: "early", roomId: "r1", createdAt: "2026-06-06T08:00:00+09:00" }));
+    expect(messagesIn(s, "r1").map((m) => m.id)).toEqual(["early", "late"]);
+  });
+
+  it("is stable for equal instants in different formats, tie-broken by id (A#1)", () => {
+    let s = initialState;
+    // 09:00+09:00 == 00:00Z -> same epoch; falls through to id tie-break.
+    s = applyFrame(s, msg({ id: "z", roomId: "r1", createdAt: "2026-06-06T09:00:00+09:00" }));
+    s = applyFrame(s, msg({ id: "a", roomId: "r1", createdAt: "2026-06-06T00:00:00Z" }));
+    expect(messagesIn(s, "r1").map((m) => m.id)).toEqual(["a", "z"]);
+  });
+
+  it("does not throw on invalid createdAt and falls back to id ordering (A#1)", () => {
+    let s = initialState;
+    expect(() => {
+      s = applyFrame(s, msg({ id: "b", roomId: "r1", createdAt: "not-a-date" }));
+      s = applyFrame(s, msg({ id: "a", roomId: "r1", createdAt: "also-bad" }));
+    }).not.toThrow();
+    // both unparseable + lexically equal-ish -> id tie-break decides order
+    expect(messagesIn(s, "r1").map((m) => m.id)).toEqual(["a", "b"]);
+  });
+
   it("defaults missing/empty roomId to 'general' (4)", () => {
     let s = applyFrame(initialState, msg({ id: "m1" })); // no roomId
     s = applyFrame(s, msg({ id: "m2", roomId: "" })); // empty roomId
@@ -135,6 +161,17 @@ describe("applyFrame: reaction", () => {
     s = applyFrame(s, reaction({ messageId: "m1", emoji: "👍", senderId: "alice", op: "add" }));
     s = applyFrame(s, reaction({ messageId: "m1", emoji: "👍", senderId: "ghost", op: "remove" }));
     expect(messagesIn(s, "r1")[0].reactions).toEqual({ "👍": ["alice"] });
+  });
+
+  it("ignores an unknown op rather than treating it as remove (A#2)", () => {
+    let s = base();
+    s = applyFrame(s, reaction({ messageId: "m1", emoji: "👍", senderId: "alice", op: "add" }));
+    const before = s;
+    // A future/unknown op like "toggle" must NOT remove the existing reaction.
+    const unknownOp = reaction({ messageId: "m1", emoji: "👍", senderId: "alice" });
+    const next = applyFrame(s, { ...unknownOp, op: "toggle" as ReactionFrame["op"] });
+    expect(next).toEqual(before);
+    expect(messagesIn(next, "r1")[0].reactions).toEqual({ "👍": ["alice"] });
   });
 });
 
