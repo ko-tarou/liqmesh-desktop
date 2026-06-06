@@ -22,6 +22,12 @@ use super::frame::Frame;
 /// MTU is known.
 pub const DEFAULT_MTU: usize = 247;
 
+/// Protocol version this session speaks (Contract v1). A `hello` advertising a
+/// different `protoVer` is rejected as incompatible: v1 accepts only v1, and any
+/// future version negotiation is handled out of band, not by silently interop'ing
+/// across versions.
+pub const PROTO_VER: u32 = 1;
+
 /// How long (ms) a partial reassembly may sit idle before
 /// [`Session::evict_expired`] reaps it. Bounds memory against a peer that starts
 /// a chunked message and never finishes it. PR-B2b feeds a monotonic clock.
@@ -66,6 +72,10 @@ pub struct Session {
     /// otherwise-invisible loss is observable. Forward-compatible `Unknown`
     /// frames are *not* counted (they are a normal case, not a violation).
     protocol_violations: u64,
+    /// Count of `hello` frames rejected because their `protoVer` did not match
+    /// [`PROTO_VER`]. Such a peer speaks an incompatible protocol; the frame is
+    /// dropped (`Ok(None)`) and no TOFU binding occurs. PR-B2 surfaces this.
+    incompatible_proto: u64,
 }
 
 impl Session {
@@ -80,6 +90,7 @@ impl Session {
             max_payload: payload_limit(DEFAULT_MTU),
             next_msg_id: 0,
             protocol_violations: 0,
+            incompatible_proto: 0,
         }
     }
 
@@ -91,6 +102,13 @@ impl Session {
     /// observable. Forward-compatible `Unknown` frames do **not** count.
     pub fn protocol_violations(&self) -> u64 {
         self.protocol_violations
+    }
+
+    /// Number of `hello` frames rejected as **protocol-incompatible** (their
+    /// `protoVer` did not equal [`PROTO_VER`]) over this session's lifetime.
+    /// Such frames are dropped without TOFU binding; PR-B2 surfaces this counter.
+    pub fn incompatible_proto(&self) -> u64 {
+        self.incompatible_proto
     }
 
     /// Updates the outgoing payload limit from the negotiated MTU's effective
@@ -117,7 +135,7 @@ impl Session {
         Frame::Hello {
             sender_id: self.sender_id.clone(),
             sender_name: self.sender_name.clone(),
-            proto_ver: 1,
+            proto_ver: PROTO_VER,
         }
     }
 
@@ -175,6 +193,13 @@ impl Session {
             }
             // Forward-compatible unknown/future type: normal, not a violation.
             Some(Frame::Unknown) => Ok(None),
+            // A hello advertising a different protocol version is incompatible.
+            // Checked before any TOFU binding so an incompatible peer never gets
+            // bound. v1 accepts only v1; future negotiation is out of band.
+            Some(Frame::Hello { proto_ver, .. }) if proto_ver != PROTO_VER => {
+                self.incompatible_proto += 1;
+                Ok(None)
+            }
             Some(frame) => Ok(Some(frame.normalized())),
         }
     }
@@ -407,6 +432,35 @@ mod tests {
         // Packet shorter than the 6-byte header → PacketTooShort surfaces.
         let mut rx = session("u2", "Bob");
         assert_eq!(rx.on_packet(&[0, 0, 0], 0), Err(ChunkError::PacketTooShort));
+    }
+
+    /// Builds a hello frame's packets with an explicit protoVer (the public API
+    /// always stamps protoVer:1, so we hand-craft the JSON to test other values).
+    fn hello_packets(sender_id: &str, proto_ver: u32) -> Vec<Vec<u8>> {
+        let json = format!(
+            r#"{{"type":"hello","senderId":"{sender_id}","senderName":"X","protoVer":{proto_ver}}}"#
+        );
+        super::super::chunk::split(1, json.as_bytes(), payload_limit(DEFAULT_MTU))
+            .expect("split")
+    }
+
+    #[test]
+    fn incompatible_proto_ver_hello_is_rejected_and_counted() {
+        let mut rx = session("u2", "Bob");
+        let packets = hello_packets("u1", 2); // protoVer 2 != PROTO_VER (1)
+        assert_eq!(feed(&mut rx, &packets), None, "incompatible hello dropped");
+        assert_eq!(rx.incompatible_proto(), 1);
+    }
+
+    #[test]
+    fn compatible_proto_ver_hello_is_accepted() {
+        let mut rx = session("u2", "Bob");
+        let packets = hello_packets("u1", PROTO_VER);
+        match feed(&mut rx, &packets) {
+            Some(Frame::Hello { proto_ver, .. }) => assert_eq!(proto_ver, PROTO_VER),
+            other => panic!("expected Hello, got {other:?}"),
+        }
+        assert_eq!(rx.incompatible_proto(), 0);
     }
 
     #[test]
