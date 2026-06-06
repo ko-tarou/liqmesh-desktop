@@ -114,6 +114,30 @@ export function peerReadUpTo(
 }
 
 /**
+ * Number of unread messages in a room for `myId`: messages from others (not my
+ * own, not tombstones) that fall after my own read high-water-mark
+ * (`reads[room][myId]`, advanced as I view the room). When I have no read mark
+ * yet, every other-sender message counts. The list is already sorted, so the
+ * mark's index splits read (≤) from unread (>); an unknown mark id counts the
+ * whole room (we haven't acknowledged anything we can locate).
+ */
+export function unreadCount(state: ChatState, roomId: string, myId: string): number {
+  const room = normalizeRoomId(roomId);
+  const messages = state.messagesByRoom[room] ?? [];
+  if (messages.length === 0) return 0;
+
+  const mark = state.reads[room]?.[myId];
+  const markIdx = mark ? messages.findIndex((m) => m.id === mark) : -1;
+
+  let count = 0;
+  for (let i = markIdx + 1; i < messages.length; i++) {
+    const m = messages[i];
+    if (m.senderId !== myId && !m.deleted) count++;
+  }
+  return count;
+}
+
+/**
  * Register a room explicitly (e.g. the user creating/joining one in the UI).
  * The roomId is normalized; duplicates are ignored. Returns a new immutable
  * state (or the input unchanged when the room is already known).

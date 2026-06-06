@@ -33,6 +33,7 @@ import {
   roomList as roomListPure,
   peerName as peerNamePure,
   peerReadUpTo as peerReadUpToPure,
+  unreadCount as unreadCountPure,
 } from "./store";
 
 /** localStorage key for the persisted chat history. */
@@ -57,6 +58,8 @@ export type ChatStore = ChatState & {
   peerName: (senderId: string) => string | undefined;
   /** Read helper: the message id a peer has read up to in a room, or undefined. */
   peerReadUpTo: (roomId: string, senderId: string) => string | undefined;
+  /** Read helper: count of unread (other-sender, non-deleted) messages in a room. */
+  unreadCount: (roomId: string, myId: string) => number;
   /** Wipe all persisted history (e.g. a "clear chat" affordance). */
   clear: () => void;
 };
@@ -86,6 +89,8 @@ export const useChatStore = create<ChatStore>()(
 
       peerReadUpTo: (roomId, senderId) =>
         peerReadUpToPure(toChatState(get()), roomId, senderId),
+
+      unreadCount: (roomId, myId) => unreadCountPure(toChatState(get()), roomId, myId),
 
       clear: () => set({ ...initialState, activeRoomId: DEFAULT_ROOM_ID }),
     }),

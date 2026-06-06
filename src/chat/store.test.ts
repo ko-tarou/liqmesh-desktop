@@ -15,6 +15,7 @@ import {
   roomList,
   peerName,
   peerReadUpTo,
+  unreadCount,
   type ChatState,
 } from "./store";
 import { DEFAULT_ROOM_ID } from "./frames";
@@ -241,6 +242,40 @@ describe("peerReadUpTo (C3)", () => {
   it("normalizes an empty roomId to the default room", () => {
     const s = applyFrame(initialState, read({ upToMessageId: "m3", senderId: "bob" }));
     expect(peerReadUpTo(s, "", "bob")).toBe("m3");
+  });
+});
+
+// ---- unreadCount (C3) ----------------------------------------------------
+
+describe("unreadCount (C3)", () => {
+  // Three messages from alice (the peer); "me" is bob.
+  function withPeerMessages(): ChatState {
+    let s = applyFrame(initialState, msg({ id: "a", roomId: "r1", createdAt: "2024-01-01T00:00:01Z" }));
+    s = applyFrame(s, msg({ id: "b", roomId: "r1", createdAt: "2024-01-01T00:00:02Z" }));
+    s = applyFrame(s, msg({ id: "c", roomId: "r1", createdAt: "2024-01-01T00:00:03Z" }));
+    return s;
+  }
+
+  it("is 0 for an empty / unknown room", () => {
+    expect(unreadCount(initialState, "r1", "bob")).toBe(0);
+  });
+
+  it("counts every other-sender message when I have no read mark", () => {
+    expect(unreadCount(withPeerMessages(), "r1", "bob")).toBe(3);
+  });
+
+  it("counts only messages after my own read high-water-mark", () => {
+    let s = withPeerMessages();
+    s = applyFrame(s, read({ roomId: "r1", upToMessageId: "b", senderId: "bob" })); // I read up to b
+    expect(unreadCount(s, "r1", "bob")).toBe(1); // only c remains
+  });
+
+  it("excludes my own messages and tombstones", () => {
+    let s = withPeerMessages();
+    s = applyFrame(s, msg({ id: "mine", roomId: "r1", senderId: "bob", createdAt: "2024-01-01T00:00:04Z" }));
+    s = applyFrame(s, del({ messageId: "c", senderId: "alice" })); // alice deletes her own c
+    // a, b remain unread (mine excluded, c tombstoned).
+    expect(unreadCount(s, "r1", "bob")).toBe(2);
   });
 });
 

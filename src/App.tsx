@@ -1,6 +1,7 @@
 import "./App.css";
 import { DEFAULT_ROOM_ID } from "./chat/frames";
 import { useChatStore } from "./chat/useChatStore";
+import { unreadCount } from "./chat/store";
 import { useIdentity } from "./chat/useIdentity";
 import { useBle } from "./chat/useBle";
 import { useReadReceipts } from "./chat/useReadReceipts";
@@ -42,9 +43,21 @@ function App() {
   // Subscribe to the active room's reads so the "seen" marker re-renders when a
   // peer's read high-water-mark advances.
   const roomReads = useChatStore((s) => s.reads[activeRoomId]);
+  // Subscribe to all messages + reads to drive per-room unread badges.
+  const messagesByRoom = useChatStore((s) => s.messagesByRoom);
+  const reads = useChatStore((s) => s.reads);
 
   // Always surface the default room, even if `rooms` somehow lacks it.
   const roomList = rooms.includes(DEFAULT_ROOM_ID) ? rooms : [DEFAULT_ROOM_ID, ...rooms];
+
+  // Unread badge per room (derived; recomputes when messages/reads change). The
+  // active room is excluded — viewing it is what marks it read.
+  const unreadState = { messagesByRoom, reads, rooms, peers: {} };
+  const unreadByRoom: Record<string, number> = {};
+  for (const room of roomList) {
+    if (room === activeRoomId) continue;
+    unreadByRoom[room] = unreadCount(unreadState, room, myId);
+  }
 
   const connected = status === "connected";
   const peerName = peerId ? peerNameOf(peerId) : undefined;
@@ -94,6 +107,7 @@ function App() {
           activeRoomId={activeRoomId}
           onSelect={setActiveRoom}
           onAdd={handleAddRoom}
+          unreadByRoom={unreadByRoom}
         />
 
         <section className="room">
