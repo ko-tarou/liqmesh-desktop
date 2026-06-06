@@ -101,6 +101,19 @@ export function peerName(state: ChatState, senderId: string): string | undefined
 }
 
 /**
+ * The message id a peer has read up to in a room (their read high-water-mark),
+ * or undefined if that peer has sent no `read` for the room. `roomId` is
+ * normalized so callers can pass the raw active-room id.
+ */
+export function peerReadUpTo(
+  state: ChatState,
+  roomId: string,
+  senderId: string,
+): string | undefined {
+  return state.reads[normalizeRoomId(roomId)]?.[senderId];
+}
+
+/**
  * Register a room explicitly (e.g. the user creating/joining one in the UI).
  * The roomId is normalized; duplicates are ignored. Returns a new immutable
  * state (or the input unchanged when the room is already known).
