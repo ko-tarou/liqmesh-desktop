@@ -14,19 +14,21 @@
 //! existing iOS/Android wire implementation. See
 //! `.claude/plans/001-2_ble-codec.md`.
 
-// stub for red phase
+use std::collections::HashMap;
 
 /// Fixed header length in bytes: msgId(4) + seq(1) + total(1).
 pub const HEADER_LEN: usize = 6;
 /// ATT protocol overhead subtracted from the negotiated MTU.
 pub const ATT_OVERHEAD: usize = 3;
+/// Maximum number of chunks (`total` must fit in a single byte).
+pub const MAX_CHUNKS: usize = u8::MAX as usize; // 255
 
 /// Returns the maximum payload size that fits in a single packet for the given
 /// negotiated MTU: `mtu - 3(ATT) - 6(header)`.
 ///
 /// If the MTU is too small to fit even the ATT + header overhead, returns 0.
-pub fn payload_limit(_mtu: usize) -> usize {
-    0
+pub fn payload_limit(mtu: usize) -> usize {
+    mtu.saturating_sub(ATT_OVERHEAD + HEADER_LEN)
 }
 
 /// Errors produced while reassembling chunked packets.
@@ -46,22 +48,109 @@ pub enum ChunkError {
 }
 
 /// Splits `payload` into header-prefixed packets for the given `msg_id`.
-pub fn split(_msg_id: u32, _payload: &[u8], _max_payload: usize) -> Result<Vec<Vec<u8>>, ChunkError> {
-    Ok(vec![])
+///
+/// Each packet is `[msgId:4 BE][seq:1][total:1][payload-chunk]`. `seq` is
+/// 0-based (`0..total`). An empty payload yields a single packet with
+/// `total == 1` and an empty payload chunk.
+///
+/// Returns [`ChunkError::TooManyChunks`] if the payload would require more than
+/// 255 chunks for the given `max_payload`.
+pub fn split(msg_id: u32, payload: &[u8], max_payload: usize) -> Result<Vec<Vec<u8>>, ChunkError> {
+    assert!(max_payload > 0, "max_payload must be > 0");
+
+    // Even an empty payload is one chunk (total == 1, no split).
+    let total = if payload.is_empty() {
+        1
+    } else {
+        payload.len().div_ceil(max_payload)
+    };
+
+    if total > MAX_CHUNKS {
+        return Err(ChunkError::TooManyChunks);
+    }
+
+    let id = msg_id.to_be_bytes();
+    let mut packets = Vec::with_capacity(total);
+    for seq in 0..total {
+        let start = seq * max_payload;
+        let end = (start + max_payload).min(payload.len());
+        let chunk = &payload[start..end];
+
+        let mut pkt = Vec::with_capacity(HEADER_LEN + chunk.len());
+        pkt.extend_from_slice(&id);
+        pkt.push(seq as u8);
+        pkt.push(total as u8);
+        pkt.extend_from_slice(chunk);
+        packets.push(pkt);
+    }
+    Ok(packets)
+}
+
+/// In-progress reassembly state for a single `msgId`.
+struct Partial {
+    total: u8,
+    /// One slot per `seq`; `None` until that chunk arrives.
+    chunks: Vec<Option<Vec<u8>>>,
+    received: usize,
 }
 
 /// Reassembles chunked packets into complete payloads, keyed by `msgId`.
+///
+/// Supports out-of-order delivery and multiple concurrent `msgId`s.
 #[derive(Default)]
-pub struct Reassembler;
+pub struct Reassembler {
+    partials: HashMap<u32, Partial>,
+}
 
 impl Reassembler {
     pub fn new() -> Self {
-        Reassembler
+        Reassembler {
+            partials: HashMap::new(),
+        }
     }
 
     /// Feeds one packet. Returns `Ok(Some(payload))` when the message for that
     /// `msgId` is complete, `Ok(None)` while still waiting for more chunks.
-    pub fn push(&mut self, _packet: &[u8]) -> Result<Option<Vec<u8>>, ChunkError> {
+    pub fn push(&mut self, packet: &[u8]) -> Result<Option<Vec<u8>>, ChunkError> {
+        if packet.len() < HEADER_LEN {
+            return Err(ChunkError::PacketTooShort);
+        }
+        let msg_id = u32::from_be_bytes([packet[0], packet[1], packet[2], packet[3]]);
+        let seq = packet[4];
+        let total = packet[5];
+        let body = &packet[HEADER_LEN..];
+
+        if total == 0 {
+            return Err(ChunkError::InvalidTotal);
+        }
+        if seq >= total {
+            return Err(ChunkError::SeqOutOfRange);
+        }
+
+        let entry = self.partials.entry(msg_id).or_insert_with(|| Partial {
+            total,
+            chunks: vec![None; total as usize],
+            received: 0,
+        });
+
+        if entry.total != total {
+            return Err(ChunkError::TotalMismatch);
+        }
+
+        // Idempotent on duplicate seq: only count the first arrival.
+        if entry.chunks[seq as usize].is_none() {
+            entry.chunks[seq as usize] = Some(body.to_vec());
+            entry.received += 1;
+        }
+
+        if entry.received == entry.total as usize {
+            let partial = self.partials.remove(&msg_id).expect("present");
+            let mut out = Vec::new();
+            for chunk in partial.chunks {
+                out.extend_from_slice(&chunk.expect("all chunks present"));
+            }
+            return Ok(Some(out));
+        }
         Ok(None)
     }
 }
