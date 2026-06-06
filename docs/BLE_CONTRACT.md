@@ -1,42 +1,46 @@
 # LiqMesh BLE Interop Contract v1
 
-Canonical — do not diverge. Changes go through the architect session.
+> canonical — do not diverge; changes go through the architect session
 
-## Goal
-When the online path (Supabase) is unavailable, Android / iOS / Windows-Desktop talk directly over BLE (P2P).
+目的: オンライン(Supabase)断時、Android/iOS/Windows-Desktop が直接 BLE で P2P チャットする。
 
-## Roles
-- Every client is dual-role (advertise/peripheral + scan/connect/central) where the OS allows.
-- iOS / Android = full equal peers (both roles).
-- Windows Desktop = central only (cannot reliably advertise — OS limitation); it connects to advertising phones.
-- After connect, the GATT connection is held as a persistent, full-duplex session (WebSocket-like). Disconnect on out-of-range is acceptable.
-- P2P pairs all supported: iOS<->Android, Android<->Desktop, Desktop<->iOS (Desktop is always the central).
-- v1 = direct links only. Multi-hop relay = v2.
+## 役割
 
-## GATT (fixed across all platforms)
+- 全クライアントは dual-role（OS が許す範囲で advertise(peripheral)＋scan/connect(central)）。
+- iOS/Android = 完全な対等ピア（両役可）。**Windows Desktop = central 専用**（advertise 不可、相手へ接続して参加）。
+- 接続後は GATT 接続を永続セッションとして保持（WebSocket 的・全二重）。範囲外で切断は許容。
+- P2P ペア: iOS↔Android / Android↔Desktop / Desktop↔iOS すべて成立（Desktop は常に central）。
+- v1 = 直接リンクのみ。マルチホップ中継は v2。
+
+## GATT（全プラットフォーム固定）
+
 - Service UUID:  `B1E5C0DE-1A2B-4C3D-8E9F-000000000001`
-- TX  (Write / WriteWithoutResponse, central -> peripheral):  `B1E5C0DE-1A2B-4C3D-8E9F-000000000002`
-- RX  (Notify, peripheral -> central):                        `B1E5C0DE-1A2B-4C3D-8E9F-000000000003`
-- Advertise localName: `"LQM-" + first 4 chars of deviceId`
-- Central: scan for the Service UUID -> connect -> subscribe RX -> write to TX.
+- TX (Write / WriteWithoutResponse, central→peripheral):  `B1E5C0DE-1A2B-4C3D-8E9F-000000000002`
+- RX (Notify, peripheral→central):                        `B1E5C0DE-1A2B-4C3D-8E9F-000000000003`
+- Advertise localName: `"LQM-"` + deviceId 先頭 4 文字
+- Central は Service UUID でスキャン→接続→RX 購読→TX へ書込。
 
-## Connection / MTU / chunking
-- Request MTU 247 on connect (fall back to 23 if refused).
-- Split each logical message (UTF-8 JSON) into chunks. Each packet:
+## 接続 / MTU / チャンク
+
+- 接続時 MTU 247 を要求（失敗時 23 で動作）。
+- 1 論理メッセージ(UTF-8 JSON)を分割。各パケット:
   `[msgId: 4 bytes big-endian][seq: 1 byte][total: 1 byte][payload...]`
-  payload max = negotiatedMTU - 3 (ATT) - 6 (header). Reassemble by msgId using seq/total. total=1 means no split.
+  payload 上限 = negotiatedMTU - 3(ATT) - 6(header)。受信は msgId 単位で seq/total から再構成。total=1 は無分割。
 
-## Payload (identical JSON to the app wire; unknown `type` ignored = forward-compatible)
-- `hello`    `{ "type":"hello", "senderId":"", "senderName":"", "protoVer":1 }`  (required both directions right after connect)
-- `msg`      `{ "type":"msg", "id":"", "senderId":"", "senderName":"", "body":"", "createdAt":0, "roomId":"", "replyToId":null }`
-- `reaction` `{ "type":"reaction", "messageId":"", "senderId":"", "emoji":"", "op":"add" }`
-- `delete`   `{ "type":"delete", "messageId":"", "senderId":"" }`
-- `read`     `{ "type":"read", "roomId":"", "upToMessageId":"", "senderId":"" }`
-- (optional) `backfill`: send recent N messages after hello.
+## ペイロード（既存アプリ wire と同一 JSON。未知 type は無視＝前方互換）
 
-## Integrity / security
-- senderId is bound per-connection (trust-on-first-use) to prevent spoofing.
-- Encryption / pairing beyond standard BLE is out of scope for v1.
+- hello   `{type:"hello", senderId, senderName, protoVer:1}`   ← 接続直後に双方向で必須
+- msg     `{type:"msg", id, senderId, senderName, body, createdAt, roomId, replyToId?}`
+- reaction `{type:"reaction", messageId, senderId, emoji, op}`
+- delete  `{type:"delete", messageId, senderId}`
+- read    `{type:"read", roomId, upToMessageId, senderId}`
+- (任意) backfill: 直近 N 件を hello 後に送る
 
-## Interop acceptance test
-- Two devices pair: exchange hello -> bidirectional msg -> reaction/delete/read round-trip -> a long message that must be chunked arrives with no loss.
+## 整合 / セキュリティ
+
+- senderId は接続単位に束縛(trust-on-first-use)＝なりすまし防止。
+- 暗号化/ペアリング(標準 BLE 以上)は v1 スコープ外。
+
+## 相互運用テスト合格条件
+
+- 2 台ペアで hello 交換→双方向 msg→reaction/delete/read が往復→チャンク分割される長文も無損失。
