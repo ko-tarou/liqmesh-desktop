@@ -7,9 +7,11 @@ type Props = {
   myId: string;
   /** Toggle a reaction on a message (omitted/undefined disables reacting). */
   onReact?: (messageId: string, emoji: string, op: "add" | "remove") => void;
+  /** Delete one of my own messages (omitted/undefined disables deleting). */
+  onDelete?: (messageId: string) => void;
 };
 
-export function MessageList({ messages, myId, onReact }: Props) {
+export function MessageList({ messages, myId, onReact, onDelete }: Props) {
   const endRef = useRef<HTMLDivElement>(null);
 
   // Keep the newest message in view as the conversation grows.
@@ -37,6 +39,7 @@ export function MessageList({ messages, myId, onReact }: Props) {
           mine={m.senderId === myId}
           myId={myId}
           onReact={onReact}
+          onDelete={onDelete}
         />
       ))}
       <div ref={endRef} />

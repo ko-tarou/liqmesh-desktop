@@ -10,6 +10,11 @@ type Props = {
   myId: string;
   /** Toggle a reaction on this message. Absent/disabled hides the affordance. */
   onReact?: (messageId: string, emoji: string, op: "add" | "remove") => void;
+  /**
+   * Delete this message. Only offered on my own, not-yet-deleted messages;
+   * absent/undefined (e.g. offline) hides the affordance.
+   */
+  onDelete?: (messageId: string) => void;
 };
 
 /** Compact wall-clock time for a message's createdAt (falls back to raw). */
@@ -19,10 +24,12 @@ function formatTime(iso: string): string {
   return new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-export function MessageBubble({ message, mine, myId, onReact }: Props) {
+export function MessageBubble({ message, mine, myId, onReact, onDelete }: Props) {
   const reactionEntries = Object.entries(message.reactions);
   // Reactions are meaningless on a tombstone; hide the affordance there too.
   const canReact = !!onReact && !message.deleted;
+  // Delete is only mine to do, and only while the message still has content.
+  const canDelete = !!onDelete && mine && !message.deleted;
 
   /** Toggle my reaction for `emoji`: remove if I already reacted, else add. */
   function toggle(emoji: string) {
@@ -72,19 +79,35 @@ export function MessageBubble({ message, mine, myId, onReact }: Props) {
           </div>
         )}
 
-        {canReact && (
-          <div className="msg-react-bar" aria-label="add reaction">
-            {QUICK_EMOJIS.map((emoji) => (
+        {(canReact || canDelete) && (
+          <div className="msg-action-bar">
+            {canReact && (
+              <div className="msg-react-bar" aria-label="add reaction">
+                {QUICK_EMOJIS.map((emoji) => (
+                  <button
+                    key={emoji}
+                    type="button"
+                    className="react-add"
+                    title={`react ${emoji}`}
+                    onClick={() => toggle(emoji)}
+                  >
+                    {emoji}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {canDelete && (
               <button
-                key={emoji}
                 type="button"
-                className="react-add"
-                title={`react ${emoji}`}
-                onClick={() => toggle(emoji)}
+                className="msg-delete"
+                title="メッセージを削除"
+                aria-label="delete message"
+                onClick={() => onDelete?.(message.id)}
               >
-                {emoji}
+                🗑
               </button>
-            ))}
+            )}
           </div>
         )}
       </div>

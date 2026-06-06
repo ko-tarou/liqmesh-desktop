@@ -420,17 +420,22 @@ button:disabled {
   background: var(--mine);
 }
 
-/* Quick-react bar: a faint emoji strip that surfaces on bubble hover. */
-.msg-react-bar {
+/* Action bar (quick-react + delete): a faint strip that surfaces on hover. */
+.msg-action-bar {
   display: flex;
-  gap: 2px;
+  align-items: center;
+  gap: 6px;
   margin-top: 6px;
   opacity: 0;
   transition: opacity 0.12s ease;
 }
-.msg-bubble:hover .msg-react-bar,
-.msg-react-bar:focus-within {
+.msg-bubble:hover .msg-action-bar,
+.msg-action-bar:focus-within {
   opacity: 1;
+}
+.msg-react-bar {
+  display: flex;
+  gap: 2px;
 }
 .react-add {
   font-size: 0.85rem;
@@ -444,6 +449,23 @@ button:disabled {
 .react-add:hover {
   background: #0d1117;
   border-color: var(--panel-border);
+}
+/* Delete my own message — muted until hovered, then a soft danger tone. */
+.msg-delete {
+  font-size: 0.8rem;
+  line-height: 1;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 2px 4px;
+  margin-left: auto;
+  cursor: pointer;
+  opacity: 0.7;
+}
+.msg-delete:hover {
+  opacity: 1;
+  background: #2a1416;
+  border-color: #5c2a2e;
 }
 
 /* ---- composer ---------------------------------------------------------- */
