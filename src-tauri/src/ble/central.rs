@@ -29,7 +29,7 @@ use btleplug::api::{
 };
 use btleplug::platform::{Adapter, Manager, Peripheral};
 use futures::StreamExt;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use super::frame::Frame;
@@ -185,11 +185,22 @@ async fn connect_and_resolve_chars(
 ///
 /// Any setup failure is reported as a [`TransportEvent::LinkError`] and the
 /// function returns; it never panics.
+///
+/// ## Teardown guarantee
+/// `shutdown` is an external stop signal: firing it (`ble_stop`, or a reconnect
+/// that supersedes this link) cancels the [`Driver::run`] future via `select!`
+/// and proceeds to the same teardown path as a natural driver exit — the
+/// notification/tick tasks are aborted and the GATT connection is disconnected.
+/// This is the only reliable way to wind a connection down, because `Driver::run`
+/// holds a `tokio::time::interval` tick source that never closes on its own;
+/// dropping the outbound sender alone would leave the old driver (and its
+/// notif/tick tasks + GATT link) running indefinitely.
 pub async fn connect_and_run(
     my_id: String,
     my_name: String,
     events: mpsc::Sender<TransportEvent>,
     outbound: mpsc::Receiver<Frame>,
+    shutdown: oneshot::Receiver<()>,
 ) {
     // 1. Adapter.
     let manager = match Manager::new().await {
@@ -260,9 +271,16 @@ pub async fn connect_and_run(
         tx_char,
     };
     let driver = Driver::new(session, link, clock);
-    driver.run(inbound_rx, outbound, tick_rx, events).await;
+    // Run the driver, but allow an external `shutdown` to cancel it: placing
+    // `driver.run(..)` as a `select!` branch means firing `shutdown` drops the
+    // run future (cancelling it) and falls through to the shared teardown below.
+    tokio::select! {
+        _ = driver.run(inbound_rx, outbound, tick_rx, events) => {}
+        _ = shutdown => {}
+    }
 
-    // Driver returned: tear down the helper tasks and the GATT connection.
+    // Either path (driver exited, or shutdown requested): tear down the helper
+    // tasks and the GATT connection so nothing leaks across a reconnect/stop.
     notif_task.abort();
     tick_task.abort();
     let _ = peripheral.disconnect().await;
