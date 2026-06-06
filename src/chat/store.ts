@@ -61,8 +61,21 @@ export function messagesIn(state: ChatState, roomId: string): Message[] {
 
 // ---- internal helpers ----------------------------------------------------
 
-/** Total order: createdAt ascending, then id ascending as a stable tie-break. */
+/**
+ * Total order over messages.
+ *
+ * Primary key: the instant `createdAt` denotes. We first compare by parsed epoch
+ * (`Date.parse`) so that two equivalent timestamps written in different formats
+ * (e.g. `"…Z"` vs `"+09:00"`) collate identically across platforms. If either
+ * side fails to parse, or the epochs tie, we fall back to a lexical comparison of
+ * the raw `createdAt` strings, and finally to `id` as a stable, total tie-break.
+ */
 function compareMessages(a: Message, b: Message): number {
+  const ea = Date.parse(a.createdAt);
+  const eb = Date.parse(b.createdAt);
+  if (!Number.isNaN(ea) && !Number.isNaN(eb) && ea !== eb) {
+    return ea < eb ? -1 : 1;
+  }
   if (a.createdAt < b.createdAt) return -1;
   if (a.createdAt > b.createdAt) return 1;
   if (a.id < b.id) return -1;
@@ -147,16 +160,21 @@ function applyReaction(state: ChatState, frame: ReactionFrame): ChatState {
       };
     }
 
-    // op === "remove"
-    if (!current.includes(frame.senderId)) return m; // nothing to remove
-    const remaining = current.filter((id) => id !== frame.senderId);
-    const reactions = { ...m.reactions };
-    if (remaining.length === 0) {
-      delete reactions[frame.emoji]; // prune empty emoji key
-    } else {
-      reactions[frame.emoji] = remaining;
+    if (frame.op === "remove") {
+      if (!current.includes(frame.senderId)) return m; // nothing to remove
+      const remaining = current.filter((id) => id !== frame.senderId);
+      const reactions = { ...m.reactions };
+      if (remaining.length === 0) {
+        delete reactions[frame.emoji]; // prune empty emoji key
+      } else {
+        reactions[frame.emoji] = remaining;
+      }
+      return { ...m, reactions };
     }
-    return { ...m, reactions };
+
+    // Unknown op (e.g. a future "toggle"): ignore rather than guessing. Strict
+    // handling keeps cross-platform behaviour predictable / forward-compatible.
+    return m;
   });
 }
 
