@@ -5,9 +5,11 @@ import { MessageBubble } from "./MessageBubble";
 type Props = {
   messages: Message[];
   myId: string;
+  /** Toggle a reaction on a message (omitted/undefined disables reacting). */
+  onReact?: (messageId: string, emoji: string, op: "add" | "remove") => void;
 };
 
-export function MessageList({ messages, myId }: Props) {
+export function MessageList({ messages, myId, onReact }: Props) {
   const endRef = useRef<HTMLDivElement>(null);
 
   // Keep the newest message in view as the conversation grows.
@@ -29,7 +31,13 @@ export function MessageList({ messages, myId }: Props) {
   return (
     <div className="msg-list">
       {messages.map((m) => (
-        <MessageBubble key={m.id} message={m} mine={m.senderId === myId} />
+        <MessageBubble
+          key={m.id}
+          message={m}
+          mine={m.senderId === myId}
+          myId={myId}
+          onReact={onReact}
+        />
       ))}
       <div ref={endRef} />
     </div>
