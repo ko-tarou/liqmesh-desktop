@@ -35,6 +35,12 @@ export type UseBle = {
   stats: BleStats | null;
   /** Last error string surfaced to the UI (connect failure or link error). */
   error: string | null;
+  /**
+   * senderId of the most recent `hello` peer (single-link assumption). The
+   * display name is resolved from the store's `peers` map by the UI. Cleared
+   * on disconnect.
+   */
+  peerId: string | null;
   connect: (myId: string, myName: string) => Promise<void>;
   disconnect: () => Promise<void>;
   /** Optimistically store + send a chat message to the given room. */
@@ -45,6 +51,7 @@ export function useBle(): UseBle {
   const [status, setStatus] = useState<BleStatus>("offline");
   const [stats, setStats] = useState<BleStats | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [peerId, setPeerId] = useState<string | null>(null);
 
   const applyFrame = useChatStore((s) => s.applyFrame);
   const addLocalMessage = useChatStore((s) => s.addLocalMessage);
@@ -56,14 +63,23 @@ export function useBle(): UseBle {
         setStatus("connected");
         setError(null);
       }),
-      listen("ble://disconnected", () => setStatus("offline")),
+      listen("ble://disconnected", () => {
+        setStatus("offline");
+        setPeerId(null);
+      }),
       listen("ble://error", (event) => {
         setStatus("offline");
+        setPeerId(null);
         const p = event.payload as BleErrorPayload | null;
         setError(p ? `${p.kind}${p.message ? `: ${p.message}` : ""}` : "link error");
       }),
       listen<Frame>("ble://frame", (event) => {
-        applyFrame(event.payload);
+        const frame = event.payload;
+        applyFrame(frame);
+        // Track the connected peer (single-link). `hello` is the remote peer's
+        // presence beacon, so it identifies who we're talking to. We don't use
+        // `msg.senderId` here because that also echoes our own outgoing sends.
+        if (frame.type === "hello") setPeerId(frame.senderId);
       }),
       listen<BleStats>("ble://stats", (event) => {
         setStats(event.payload);
@@ -93,6 +109,7 @@ export function useBle(): UseBle {
       setError(String(e));
     }
     setStatus("offline");
+    setPeerId(null);
   }, []);
 
   const sendMessage = useCallback(
@@ -121,5 +138,5 @@ export function useBle(): UseBle {
     [addLocalMessage],
   );
 
-  return { status, stats, error, connect, disconnect, sendMessage };
+  return { status, stats, error, peerId, connect, disconnect, sendMessage };
 }
