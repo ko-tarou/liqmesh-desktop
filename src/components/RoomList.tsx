@@ -7,15 +7,16 @@ type Props = {
   onSelect: (roomId: string) => void;
   /** Register a new room and switch to it. */
   onAdd: (roomId: string) => void;
+  /** roomId -> unread count; rooms absent/0 show no badge. */
+  unreadByRoom?: Record<string, number>;
 };
 
 /**
- * Room switcher: lists known rooms, highlights the active one, and lets the
- * user create/join a room by name. Adding normalizes the input and switches to
- * it (delegated to `onAdd`). Unread counts are intentionally omitted in C2 —
- * see the PR handoff (precise unread tracking lands in C3).
+ * Room switcher: lists known rooms, highlights the active one, shows a per-room
+ * unread badge, and lets the user create/join a room by name. Adding normalizes
+ * the input and switches to it (delegated to `onAdd`).
  */
-export function RoomList({ rooms, activeRoomId, onSelect, onAdd }: Props) {
+export function RoomList({ rooms, activeRoomId, onSelect, onAdd, unreadByRoom }: Props) {
   const [draft, setDraft] = useState("");
 
   function submit() {
@@ -32,6 +33,7 @@ export function RoomList({ rooms, activeRoomId, onSelect, onAdd }: Props) {
       <ul className="room-list-items">
         {rooms.map((room) => {
           const active = room === activeRoomId;
+          const unread = unreadByRoom?.[room] ?? 0;
           return (
             <li key={room}>
               <button
@@ -44,6 +46,11 @@ export function RoomList({ rooms, activeRoomId, onSelect, onAdd }: Props) {
                   #
                 </span>
                 <span className="room-list-name">{room}</span>
+                {unread > 0 && (
+                  <span className="room-unread" aria-label={`${unread} unread`}>
+                    {unread > 99 ? "99+" : unread}
+                  </span>
+                )}
               </button>
             </li>
           );

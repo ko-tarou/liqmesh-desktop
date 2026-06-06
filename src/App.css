@@ -254,6 +254,23 @@ button:disabled {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Unread count badge, pushed to the trailing edge of the room row. */
+.room-unread {
+  margin-left: auto;
+  flex: 0 0 auto;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--brand);
+  color: var(--brand-ink);
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1;
+}
 
 .room-list-add {
   display: flex;
