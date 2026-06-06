@@ -132,45 +132,16 @@ impl Frame {
     /// `roomId` on a [`Frame::Msg`] / [`Frame::Read`] becomes
     /// [`DEFAULT_ROOM_ID`] (`"general"`). All other frames pass through
     /// untouched.
-    pub fn normalized(self) -> Frame {
-        match self {
-            Frame::Msg {
-                id,
-                sender_id,
-                sender_name,
-                body,
-                created_at,
-                room_id,
-                reply_to_id,
-            } => Frame::Msg {
-                id,
-                sender_id,
-                sender_name,
-                body,
-                created_at,
-                room_id: normalize_room_id(room_id),
-                reply_to_id,
-            },
-            Frame::Read {
-                room_id,
-                up_to_message_id,
-                sender_id,
-            } => Frame::Read {
-                room_id: normalize_room_id(room_id),
-                up_to_message_id,
-                sender_id,
-            },
-            other => other,
+    pub fn normalized(mut self) -> Frame {
+        match &mut self {
+            Frame::Msg { room_id, .. } | Frame::Read { room_id, .. } => {
+                if room_id.is_empty() {
+                    *room_id = default_room_id();
+                }
+            }
+            _ => {}
         }
-    }
-}
-
-/// Maps an empty `room_id` to [`DEFAULT_ROOM_ID`], leaving non-empty ids as-is.
-fn normalize_room_id(room_id: String) -> String {
-    if room_id.is_empty() {
-        default_room_id()
-    } else {
-        room_id
+        self
     }
 }
 
