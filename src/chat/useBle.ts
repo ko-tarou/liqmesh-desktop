@@ -45,6 +45,16 @@ export type UseBle = {
   disconnect: () => Promise<void>;
   /** Optimistically store + send a chat message to the given room. */
   sendMessage: (body: string, roomId: string, myId: string, myName: string) => Promise<void>;
+  /**
+   * Optimistically apply + send a reaction toggle. `op` is "add" / "remove";
+   * the reducer is idempotent so a repeated op or the later wire echo is a no-op.
+   */
+  sendReaction: (
+    messageId: string,
+    emoji: string,
+    op: "add" | "remove",
+    myId: string,
+  ) => Promise<void>;
 };
 
 export function useBle(): UseBle {
@@ -138,5 +148,21 @@ export function useBle(): UseBle {
     [addLocalMessage],
   );
 
-  return { status, stats, error, peerId, connect, disconnect, sendMessage };
+  const sendReaction = useCallback(
+    async (messageId: string, emoji: string, op: "add" | "remove", myId: string) => {
+      const frame: Frame = { type: "reaction", messageId, senderId: myId, emoji, op };
+
+      // Optimistic local apply (idempotent; the later wire echo is a no-op).
+      applyFrame(frame);
+
+      try {
+        await invoke("ble_send", { frameJson: JSON.stringify(frame) });
+      } catch (e) {
+        setError(`reaction failed: ${String(e)}`);
+      }
+    },
+    [applyFrame],
+  );
+
+  return { status, stats, error, peerId, connect, disconnect, sendMessage, sendReaction };
 }
