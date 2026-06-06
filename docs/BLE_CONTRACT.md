@@ -1,4 +1,4 @@
-# LiqMesh BLE Interop Contract v1
+# LiqMesh BLE Interop Contract v1.1
 
 > canonical — do not diverge; changes go through the architect session
 
@@ -35,6 +35,13 @@
 - delete  `{type:"delete", messageId, senderId}`
 - read    `{type:"read", roomId, upToMessageId, senderId}`
 - (任意) backfill: 直近 N 件を hello 後に送る
+
+## Transport semantics (v1.1)
+A transport carries the FULL frame set (hello / msg / reaction / delete / read), not just `msg`.
+- send/receive operate on frames, not only on Message objects.
+- On receive, the app applies non-`msg` frames to local state (reactions/deletes/reads -> reducers / repository.apply*), exactly as it does for `msg`.
+- This applies uniformly to ALL transports (BLE, Wi-Fi mesh, WebSocket): any platform interoperates and no frame type is silently dropped.
+- Android note: generalize the internal `Transport` interface from `Message` to a sealed `WireFrame` (reuse `MessageWire.Frame`); fold the mesh-only `MeshEvents` side-channel into the frame flow.
 
 ## 整合 / セキュリティ
 
