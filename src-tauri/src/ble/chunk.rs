@@ -27,8 +27,9 @@ pub const MAX_CHUNKS: usize = u8::MAX as usize; // 255
 /// concurrently. This bounds memory against a peer that opens many partial
 /// reassemblies and never finishes them (each parks up to `MAX_CHUNKS` buffers).
 /// 64 comfortably exceeds the handful of in-flight messages a real conversation
-/// produces while capping worst-case state. Eviction / timeout of stale
-/// partials is deferred to PR-B (it needs the connection-session boundary).
+/// produces while capping worst-case state. Stale partials are additionally
+/// reaped by [`Reassembler::evict_expired`], driven by the session layer's
+/// caller-supplied monotonic clock.
 pub const MAX_CONCURRENT_REASSEMBLIES: usize = 64;
 
 /// Returns the maximum payload size that fits in a single packet for the given
@@ -110,6 +111,11 @@ struct Partial {
     /// One slot per `seq`; `None` until that chunk arrives.
     chunks: Vec<Option<Vec<u8>>>,
     received: usize,
+    /// Caller-supplied monotonic timestamp (ms) of the most recent chunk for
+    /// this `msgId`. Refreshed on every accepted chunk and used by
+    /// [`Reassembler::evict_expired`] to drop reassemblies that have gone quiet,
+    /// bounding memory against peers that start messages they never finish.
+    last_activity_ms: u64,
 }
 
 /// Reassembles chunked packets into complete payloads, keyed by `msgId`.
@@ -118,8 +124,11 @@ struct Partial {
 /// [`MAX_CONCURRENT_REASSEMBLIES`]. Once that many partial reassemblies are open,
 /// a packet that would start a *new* `msgId` is rejected with
 /// [`ChunkError::TooManyConcurrent`]; appends to already-open `msgId`s still
-/// succeed. Timeout / eviction of stale partials is deferred to PR-B, which owns
-/// the connection-session boundary.
+/// succeed.
+///
+/// Stale partials are reaped by [`Reassembler::evict_expired`], which the
+/// session layer calls with a caller-supplied monotonic clock — this type stays
+/// sans-IO and takes all time as `now_ms` arguments rather than reading a clock.
 #[derive(Default)]
 pub struct Reassembler {
     partials: HashMap<u32, Partial>,
@@ -132,9 +141,15 @@ impl Reassembler {
         }
     }
 
-    /// Feeds one packet. Returns `Ok(Some(payload))` when the message for that
-    /// `msgId` is complete, `Ok(None)` while still waiting for more chunks.
-    pub fn push(&mut self, packet: &[u8]) -> Result<Option<Vec<u8>>, ChunkError> {
+    /// Feeds one packet, stamping the reassembly with the caller-supplied
+    /// monotonic timestamp `now_ms`. Returns `Ok(Some(payload))` when the
+    /// message for that `msgId` is complete, `Ok(None)` while still waiting for
+    /// more chunks.
+    ///
+    /// `now_ms` is recorded as the partial's `last_activity_ms` so
+    /// [`Reassembler::evict_expired`] can later reap reassemblies that have gone
+    /// quiet. (Sans-IO: the caller owns the clock; this type never reads one.)
+    pub fn push(&mut self, packet: &[u8], now_ms: u64) -> Result<Option<Vec<u8>>, ChunkError> {
         if packet.len() < HEADER_LEN {
             return Err(ChunkError::PacketTooShort);
         }
@@ -163,11 +178,15 @@ impl Reassembler {
             total,
             chunks: vec![None; total as usize],
             received: 0,
+            last_activity_ms: now_ms,
         });
 
         if entry.total != total {
             return Err(ChunkError::TotalMismatch);
         }
+
+        // Any accepted packet for this msgId refreshes the inactivity timer.
+        entry.last_activity_ms = now_ms;
 
         // Idempotent on duplicate seq: only count the first arrival.
         if entry.chunks[seq as usize].is_none() {
@@ -185,6 +204,20 @@ impl Reassembler {
         }
         Ok(None)
     }
+
+    /// Drops every partial reassembly whose last activity is older than `ttl_ms`
+    /// relative to the caller-supplied `now_ms`, returning the number removed.
+    ///
+    /// A partial expires when `now_ms - last_activity_ms > ttl_ms`. This frees
+    /// memory held by messages a peer started but never finished (lost final
+    /// chunk, peer vanished, etc.). The session layer drives this with a
+    /// monotonic clock; the boundary value (`== ttl_ms`) is retained.
+    pub fn evict_expired(&mut self, now_ms: u64, ttl_ms: u64) -> usize {
+        let before = self.partials.len();
+        self.partials
+            .retain(|_, p| now_ms.saturating_sub(p.last_activity_ms) <= ttl_ms);
+        before - self.partials.len()
+    }
 }
 
 #[cfg(test)]
@@ -197,7 +230,7 @@ mod tests {
         let mut r = Reassembler::new();
         let mut out = None;
         for p in &packets {
-            if let Some(done) = r.push(p).expect("push ok") {
+            if let Some(done) = r.push(p, 0).expect("push ok") {
                 out = Some(done);
             }
         }
@@ -259,7 +292,7 @@ mod tests {
         let mut r = Reassembler::new();
         let mut out = None;
         for p in &packets {
-            if let Some(done) = r.push(p).expect("push") {
+            if let Some(done) = r.push(p, 0).expect("push") {
                 out = Some(done);
             }
         }
@@ -282,12 +315,12 @@ mod tests {
         let n = packets_a.len().max(packets_b.len());
         for i in 0..n {
             if let Some(p) = packets_a.get(i) {
-                if let Some(d) = r.push(p).expect("push a") {
+                if let Some(d) = r.push(p, 0).expect("push a") {
                     done_a = Some(d);
                 }
             }
             if let Some(p) = packets_b.get(i) {
-                if let Some(d) = r.push(p).expect("push b") {
+                if let Some(d) = r.push(p, 0).expect("push b") {
                     done_b = Some(d);
                 }
             }
@@ -299,7 +332,7 @@ mod tests {
     #[test]
     fn packet_too_short_errors() {
         let mut r = Reassembler::new();
-        assert_eq!(r.push(&[0, 0, 0]), Err(ChunkError::PacketTooShort));
+        assert_eq!(r.push(&[0, 0, 0], 0), Err(ChunkError::PacketTooShort));
     }
 
     #[test]
@@ -307,7 +340,7 @@ mod tests {
         // header with total = 0
         let pkt = [0u8, 0, 0, 1, 0, 0];
         let mut r = Reassembler::new();
-        assert_eq!(r.push(&pkt), Err(ChunkError::InvalidTotal));
+        assert_eq!(r.push(&pkt, 0), Err(ChunkError::InvalidTotal));
     }
 
     #[test]
@@ -315,7 +348,7 @@ mod tests {
         // total = 2, seq = 2 (must be < total)
         let pkt = [0u8, 0, 0, 1, 2, 2];
         let mut r = Reassembler::new();
-        assert_eq!(r.push(&pkt), Err(ChunkError::SeqOutOfRange));
+        assert_eq!(r.push(&pkt, 0), Err(ChunkError::SeqOutOfRange));
     }
 
     #[test]
@@ -323,10 +356,10 @@ mod tests {
         let mut r = Reassembler::new();
         // first chunk says total=2
         let p0 = [0u8, 0, 0, 1, 0, 2, b'x'];
-        assert_eq!(r.push(&p0), Ok(None));
+        assert_eq!(r.push(&p0, 0), Ok(None));
         // second chunk for same msgId says total=3
         let p1 = [0u8, 0, 0, 1, 1, 3, b'y'];
-        assert_eq!(r.push(&p1), Err(ChunkError::TotalMismatch));
+        assert_eq!(r.push(&p1, 0), Err(ChunkError::TotalMismatch));
     }
 
     #[test]
@@ -364,11 +397,11 @@ mod tests {
         let mut r = Reassembler::new();
         // Open exactly MAX_CONCURRENT_REASSEMBLIES distinct msg_ids.
         for i in 0..MAX_CONCURRENT_REASSEMBLIES as u32 {
-            assert_eq!(r.push(&open_packet(i)), Ok(None));
+            assert_eq!(r.push(&open_packet(i), 0), Ok(None));
         }
         // One more *new* msg_id must be rejected.
         assert_eq!(
-            r.push(&open_packet(MAX_CONCURRENT_REASSEMBLIES as u32)),
+            r.push(&open_packet(MAX_CONCURRENT_REASSEMBLIES as u32), 0),
             Err(ChunkError::TooManyConcurrent)
         );
     }
@@ -377,7 +410,7 @@ mod tests {
     fn append_to_existing_reassembly_succeeds_at_limit() {
         let mut r = Reassembler::new();
         for i in 0..MAX_CONCURRENT_REASSEMBLIES as u32 {
-            assert_eq!(r.push(&open_packet(i)), Ok(None));
+            assert_eq!(r.push(&open_packet(i), 0), Ok(None));
         }
         // Appending the *second* chunk to an already-open msg_id (id 0) must
         // succeed even though we are at the concurrency limit — and completes it.
@@ -385,7 +418,7 @@ mod tests {
         last.push(1); // seq=1
         last.push(2); // total=2
         last.push(b'y');
-        assert_eq!(r.push(&last), Ok(Some(vec![b'x', b'y'])));
+        assert_eq!(r.push(&last, 0), Ok(Some(vec![b'x', b'y'])));
     }
 
     fn msg_id_to_be(id: u32) -> Vec<u8> {
@@ -396,5 +429,57 @@ mod tests {
     fn header_encoding_is_big_endian() {
         let packets = split(0x01020304, b"z", 238).expect("split");
         assert_eq!(&packets[0][0..4], &[0x01, 0x02, 0x03, 0x04]);
+    }
+
+    #[test]
+    fn evict_expired_drops_stale_partial_and_blocks_completion() {
+        // A 2-chunk message where only chunk 0 arrives (at t=0) stays partial.
+        let payload: Vec<u8> = (0..400u32).map(|i| (i % 251) as u8).collect();
+        let max = payload_limit(247);
+        let packets = split(5, &payload, max).expect("split");
+        assert!(packets.len() >= 2, "need a multi-chunk message");
+
+        let mut r = Reassembler::new();
+        assert_eq!(r.push(&packets[0], 0).expect("push c0"), None);
+
+        // Past the TTL the stale partial is evicted (1 removed).
+        assert_eq!(r.evict_expired(40_000, 30_000), 1);
+
+        // With the partial gone, the late second chunk starts a *fresh* partial
+        // (seq=1 of a new 2-chunk reassembly) and cannot complete the message.
+        assert_eq!(r.push(&packets[1], 41_000).expect("push c1"), None);
+    }
+
+    #[test]
+    fn evict_expired_keeps_partial_within_ttl() {
+        let payload: Vec<u8> = (0..400u32).map(|i| (i % 251) as u8).collect();
+        let max = payload_limit(247);
+        let packets = split(6, &payload, max).expect("split");
+
+        let mut r = Reassembler::new();
+        assert_eq!(r.push(&packets[0], 0).expect("push c0"), None);
+
+        // Within the TTL nothing is evicted, so the partial can still finish.
+        assert_eq!(r.evict_expired(10_000, 30_000), 0);
+        assert_eq!(
+            r.push(&packets[1], 10_000).expect("push c1"),
+            Some(payload)
+        );
+    }
+
+    #[test]
+    fn evict_expired_uses_last_activity_not_creation() {
+        // Activity refreshes the timer: a partial touched at t=20_000 must
+        // survive an eviction at t=40_000 with a 30_000 TTL.
+        let payload: Vec<u8> = (0..600u32).map(|i| (i % 251) as u8).collect();
+        let max = payload_limit(247);
+        let packets = split(7, &payload, max).expect("split");
+        assert!(packets.len() >= 3, "need >=3 chunks to touch twice");
+
+        let mut r = Reassembler::new();
+        assert_eq!(r.push(&packets[0], 0).expect("c0"), None);
+        assert_eq!(r.push(&packets[1], 20_000).expect("c1"), None);
+        // 40_000 - 20_000 = 20_000 <= 30_000 → not expired.
+        assert_eq!(r.evict_expired(40_000, 30_000), 0);
     }
 }

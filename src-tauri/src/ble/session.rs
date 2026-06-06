@@ -22,6 +22,11 @@ use super::frame::Frame;
 /// MTU is known.
 pub const DEFAULT_MTU: usize = 247;
 
+/// How long (ms) a partial reassembly may sit idle before
+/// [`Session::evict_expired`] reaps it. Bounds memory against a peer that starts
+/// a chunked message and never finishes it. PR-B2b feeds a monotonic clock.
+pub const REASSEMBLY_TTL_MS: u64 = 30_000;
+
 /// Errors produced while encoding an outgoing frame.
 ///
 /// Wraps the chunk-layer [`ChunkError`] (via [`From`], so the chunking `?`
@@ -152,8 +157,12 @@ impl Session {
     ///   PR-B2 must surface that counter via log/metrics.
     /// - `Err(ChunkError)` — a malformed packet at the chunk layer (too short,
     ///   bad `total`, etc.); surfaced so the transport can react.
-    pub fn on_packet(&mut self, packet: &[u8]) -> Result<Option<Frame>, ChunkError> {
-        let Some(payload) = self.reassembler.push(packet)? else {
+    ///
+    /// `now_ms` is a caller-supplied monotonic timestamp recorded on the
+    /// reassembly so [`Session::evict_expired`] can later reap stale partials
+    /// (sans-IO: the session never reads a clock itself).
+    pub fn on_packet(&mut self, packet: &[u8], now_ms: u64) -> Result<Option<Frame>, ChunkError> {
+        let Some(payload) = self.reassembler.push(packet, now_ms)? else {
             return Ok(None); // still reassembling
         };
         // Completed payload: decode + normalize. Unknown/malformed → ignore.
@@ -169,6 +178,13 @@ impl Session {
             Some(frame) => Ok(Some(frame.normalized())),
         }
     }
+
+    /// Reaps partial reassemblies idle longer than [`REASSEMBLY_TTL_MS`],
+    /// returning the number dropped. `now_ms` is the caller's monotonic clock
+    /// (PR-B2b drives this periodically); the session holds no clock of its own.
+    pub fn evict_expired(&mut self, now_ms: u64) -> usize {
+        self.reassembler.evict_expired(now_ms, REASSEMBLY_TTL_MS)
+    }
 }
 
 #[cfg(test)]
@@ -180,10 +196,11 @@ mod tests {
     }
 
     /// Pushes every packet into `rx` and returns the first completed frame.
+    /// Time-agnostic tests pass a fixed `now_ms` of 0.
     fn feed(rx: &mut Session, packets: &[Vec<u8>]) -> Option<Frame> {
         let mut out = None;
         for p in packets {
-            if let Some(f) = rx.on_packet(p).expect("on_packet ok") {
+            if let Some(f) = rx.on_packet(p, 0).expect("on_packet ok") {
                 out = Some(f);
             }
         }
@@ -243,12 +260,12 @@ mod tests {
         let mut got_b = None;
         for i in 0..pa.len().max(pb.len()) {
             if let Some(p) = pa.get(i) {
-                if let Some(f) = rx.on_packet(p).expect("rx a") {
+                if let Some(f) = rx.on_packet(p, 0).expect("rx a") {
                     got_a = Some(f);
                 }
             }
             if let Some(p) = pb.get(i) {
-                if let Some(f) = rx.on_packet(p).expect("rx b") {
+                if let Some(f) = rx.on_packet(p, 0).expect("rx b") {
                     got_b = Some(f);
                 }
             }
@@ -389,6 +406,67 @@ mod tests {
     fn chunk_layer_error_propagates() {
         // Packet shorter than the 6-byte header → PacketTooShort surfaces.
         let mut rx = session("u2", "Bob");
-        assert_eq!(rx.on_packet(&[0, 0, 0]), Err(ChunkError::PacketTooShort));
+        assert_eq!(rx.on_packet(&[0, 0, 0], 0), Err(ChunkError::PacketTooShort));
+    }
+
+    #[test]
+    fn evict_expired_drops_stale_partial_after_ttl() {
+        // A 2-chunk message where only chunk 0 arrives stays partial; past the
+        // session TTL it is evicted and the message can no longer complete.
+        let mut tx = session("u1", "Alice");
+        let mut rx = session("u2", "Bob");
+        tx.set_max_payload(1); // force many small chunks
+        let msg = Frame::Msg {
+            id: "m1".into(),
+            sender_id: "u1".into(),
+            sender_name: "Alice".into(),
+            body: "hello world".into(),
+            created_at: "t".into(),
+            room_id: "lobby".into(),
+            reply_to_id: None,
+        };
+        let packets = tx.encode_frame(&msg).expect("encode");
+        assert!(packets.len() > 1);
+
+        // Receive only the first chunk at t=0.
+        assert_eq!(rx.on_packet(&packets[0], 0).expect("c0"), None);
+
+        // Past REASSEMBLY_TTL_MS the partial is reaped.
+        assert_eq!(rx.evict_expired(REASSEMBLY_TTL_MS + 10_000), 1);
+
+        // The remaining chunks can no longer reconstruct the original message.
+        let mut completed = None;
+        for p in &packets[1..] {
+            if let Some(f) = rx.on_packet(p, REASSEMBLY_TTL_MS + 11_000).expect("late") {
+                completed = Some(f);
+            }
+        }
+        assert_eq!(completed, None, "evicted partial must not complete");
+    }
+
+    #[test]
+    fn evict_expired_keeps_partial_within_ttl() {
+        let mut tx = session("u1", "Alice");
+        let mut rx = session("u2", "Bob");
+        tx.set_max_payload(1);
+        let msg = Frame::Reaction {
+            message_id: "m1".into(),
+            sender_id: "u1".into(),
+            emoji: "👍".into(),
+            op: "add".into(),
+        };
+        let packets = tx.encode_frame(&msg).expect("encode");
+        assert!(packets.len() > 1);
+
+        // Push every chunk but the last at t=0.
+        for p in &packets[..packets.len() - 1] {
+            assert_eq!(rx.on_packet(p, 0).expect("c"), None);
+        }
+        // Within the TTL nothing is evicted, so the final chunk completes it.
+        assert_eq!(rx.evict_expired(10_000), 0);
+        let last = rx
+            .on_packet(&packets[packets.len() - 1], 10_000)
+            .expect("last");
+        assert_eq!(last, Some(msg));
     }
 }
