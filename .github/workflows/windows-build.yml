@@ -1,0 +1,44 @@
+name: Windows Build
+
+# Manual-only trigger to keep CI minutes low (no push/PR triggers).
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install JS dependencies
+        run: npm ci
+
+      # Builds the frontend (beforeBuildCommand: `npm run build`) and the
+      # Windows bundles. tauri.conf.json has `bundle.targets: "all"`, which on
+      # Windows produces both an MSI (WiX) and an NSIS setup .exe.
+      - name: Build Tauri Windows bundle
+        run: npm run tauri build
+
+      - name: Upload Windows installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: liqmesh-windows
+          path: |
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
