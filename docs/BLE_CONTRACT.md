@@ -1,4 +1,4 @@
-# LiqMesh BLE Interop Contract v1.1
+# LiqMesh BLE Interop Contract v1.2
 
 > canonical — do not diverge; changes go through the architect session
 
@@ -35,6 +35,7 @@
 - delete  `{type:"delete", messageId, senderId}`
 - read    `{type:"read", roomId, upToMessageId, senderId}`
 - (任意) backfill: 直近 N 件を hello 後に送る
+- Default room id: when `roomId` is absent or empty, ALL platforms default it to the literal string `"general"` (the canonical default room). Do NOT use any other default (e.g. "default").
 
 ## Transport semantics (v1.1)
 A transport carries the FULL frame set (hello / msg / reaction / delete / read), not just `msg`.
