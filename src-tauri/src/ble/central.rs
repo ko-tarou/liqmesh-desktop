@@ -58,6 +58,27 @@ const TICK_INTERVAL: Duration = Duration::from_secs(5);
 /// chunked notifications never blocks the OS notification pump.
 const CHANNEL_CAPACITY: usize = 256;
 
+/// Whether a usable Bluetooth adapter is present, for a launch-time precheck.
+///
+/// Returns `Ok(())` when `Manager::new()` succeeds and at least one adapter is
+/// reported, mirroring the acquisition `connect_and_run` does. On error it
+/// returns a short human-readable reason for the UI to surface.
+///
+/// Caveat (btleplug 0.12 / WinRT): a *present* adapter is detected reliably, but
+/// a radio that is merely toggled **off** in Windows settings may still be
+/// listed here — that case surfaces later as a scan that finds nothing. We
+/// detect "no adapter / no BLE stack", which is the common owner failure.
+pub async fn adapter_available() -> Result<(), String> {
+    let manager = Manager::new()
+        .await
+        .map_err(|e| format!("Bluetooth stack unavailable: {e}"))?;
+    match manager.adapters().await {
+        Ok(a) if !a.is_empty() => Ok(()),
+        Ok(_) => Err("no Bluetooth adapter found".into()),
+        Err(e) => Err(format!("could not query Bluetooth adapters: {e}")),
+    }
+}
+
 /// Concrete [`GattLink`] over a connected btleplug [`Peripheral`].
 ///
 /// Holds the peripheral handle and the resolved TX characteristic; every
