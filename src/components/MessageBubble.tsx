@@ -15,6 +15,8 @@ type Props = {
    * absent/undefined (e.g. offline) hides the affordance.
    */
   onDelete?: (messageId: string) => void;
+  /** When true, show a "✓ seen" marker under this (my own) message. */
+  seen?: boolean;
 };
 
 /** Compact wall-clock time for a message's createdAt (falls back to raw). */
@@ -24,7 +26,7 @@ function formatTime(iso: string): string {
   return new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-export function MessageBubble({ message, mine, myId, onReact, onDelete }: Props) {
+export function MessageBubble({ message, mine, myId, onReact, onDelete, seen }: Props) {
   const reactionEntries = Object.entries(message.reactions);
   // Reactions are meaningless on a tombstone; hide the affordance there too.
   const canReact = !!onReact && !message.deleted;
@@ -57,6 +59,11 @@ export function MessageBubble({ message, mine, myId, onReact, onDelete }: Props)
 
         <div className="msg-meta">
           <time dateTime={message.createdAt}>{formatTime(message.createdAt)}</time>
+          {mine && seen && !message.deleted && (
+            <span className="msg-seen" title="相手が既読">
+              ✓ seen
+            </span>
+          )}
         </div>
 
         {reactionEntries.length > 0 && (

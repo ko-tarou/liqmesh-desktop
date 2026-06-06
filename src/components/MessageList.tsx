@@ -9,9 +9,11 @@ type Props = {
   onReact?: (messageId: string, emoji: string, op: "add" | "remove") => void;
   /** Delete one of my own messages (omitted/undefined disables deleting). */
   onDelete?: (messageId: string) => void;
+  /** Id of my latest message the peer has read; renders a "seen" marker under it. */
+  seenMessageId?: string;
 };
 
-export function MessageList({ messages, myId, onReact, onDelete }: Props) {
+export function MessageList({ messages, myId, onReact, onDelete, seenMessageId }: Props) {
   const endRef = useRef<HTMLDivElement>(null);
 
   // Keep the newest message in view as the conversation grows.
@@ -38,6 +40,7 @@ export function MessageList({ messages, myId, onReact, onDelete }: Props) {
           message={m}
           mine={m.senderId === myId}
           myId={myId}
+          seen={m.id === seenMessageId}
           onReact={onReact}
           onDelete={onDelete}
         />

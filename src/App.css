@@ -392,6 +392,12 @@ button:disabled {
   color: var(--muted);
   text-align: right;
 }
+/* Peer-has-read marker on my own latest seen message. */
+.msg-seen {
+  margin-left: 6px;
+  color: var(--brand);
+  font-weight: 600;
+}
 
 .msg-reactions {
   display: flex;
