@@ -14,17 +14,24 @@
  *                  original message's `senderId` (anti-spoofing). Tombstone =
  *                  `deleted: true`, `body: ""`; reactions are cleared.
  *  - read LWW:     `read` is last-write-wins per (roomId, senderId).
- *  - hello:        no-op for the message store (presence handled separately).
+ *  - presence:     `hello` and inbound `msg` record the sender's latest display
+ *                  name in `peers` (latest-wins). `hello` has NO effect on
+ *                  messages, reads, or rooms.
+ *  - rooms:        `rooms` tracks every known roomId (deduped, normalized) and
+ *                  ALWAYS contains DEFAULT_ROOM_ID. Inbound `msg` adds its room
+ *                  to the list; `addRoom` lets the UI register a room explicitly.
  *  - unknown ids:  reaction/delete against an unknown messageId are no-ops.
  */
 
 import {
   type Frame,
   type MsgFrame,
+  type HelloFrame,
   type ReactionFrame,
   type DeleteFrame,
   type ReadFrame,
   normalizeRoomId,
+  DEFAULT_ROOM_ID,
 } from "./frames";
 
 // ---- domain model --------------------------------------------------------
@@ -43,20 +50,63 @@ export type Message = {
   reactions: Record<string, string[]>;
 };
 
+/** Presence / name-resolution entry for a peer (keyed by senderId). */
+export type Peer = {
+  /** The peer's most-recently-seen display name. */
+  senderName: string;
+};
+
 export type ChatState = {
   /** roomId -> messages sorted by createdAt asc (ties by id asc) */
   messagesByRoom: Record<string, Message[]>;
   /** roomId -> senderId -> upToMessageId */
   reads: Record<string, Record<string, string>>;
+  /**
+   * Known rooms (deduped, normalized). Invariant: ALWAYS contains
+   * DEFAULT_ROOM_ID; `roomList` enforces this defensively as well.
+   */
+  rooms: string[];
+  /** senderId -> latest presence (display name). Latest-wins. */
+  peers: Record<string, Peer>;
 };
 
-export const initialState: ChatState = { messagesByRoom: {}, reads: {} };
+export const initialState: ChatState = {
+  messagesByRoom: {},
+  reads: {},
+  rooms: [DEFAULT_ROOM_ID],
+  peers: {},
+};
 
 // ---- read helpers --------------------------------------------------------
 
 /** Messages for a room (empty array if the room is unknown). */
 export function messagesIn(state: ChatState, roomId: string): Message[] {
   return state.messagesByRoom[roomId] ?? [];
+}
+
+/**
+ * The known rooms. Always includes DEFAULT_ROOM_ID: `rooms` should already
+ * contain it (invariant), but we union defensively so a malformed/migrated
+ * state can never hide the default room from the UI.
+ */
+export function roomList(state: ChatState): string[] {
+  return state.rooms.includes(DEFAULT_ROOM_ID)
+    ? state.rooms
+    : [DEFAULT_ROOM_ID, ...state.rooms];
+}
+
+/** Latest known display name for a peer, or undefined if never seen. */
+export function peerName(state: ChatState, senderId: string): string | undefined {
+  return state.peers[senderId]?.senderName;
+}
+
+/**
+ * Register a room explicitly (e.g. the user creating/joining one in the UI).
+ * The roomId is normalized; duplicates are ignored. Returns a new immutable
+ * state (or the input unchanged when the room is already known).
+ */
+export function addRoom(state: ChatState, roomId: string): ChatState {
+  return rememberRoom(state, roomId);
 }
 
 // ---- internal helpers ----------------------------------------------------
@@ -128,21 +178,50 @@ function updateMessageAt(
   };
 }
 
+/**
+ * Record/refresh a peer's display name (latest-wins). Returns the input state
+ * unchanged when the name is already current (idempotent / fewer re-renders).
+ */
+function rememberPeer(state: ChatState, senderId: string, senderName: string): ChatState {
+  if (state.peers[senderId]?.senderName === senderName) return state;
+  return { ...state, peers: { ...state.peers, [senderId]: { senderName } } };
+}
+
+/**
+ * Ensure a normalized roomId is in `rooms`. Returns the input state unchanged
+ * when already present (idempotent). Does not mutate inputs.
+ */
+function rememberRoom(state: ChatState, roomId: string): ChatState {
+  const normalized = normalizeRoomId(roomId);
+  if (state.rooms.includes(normalized)) return state;
+  return { ...state, rooms: [...state.rooms, normalized] };
+}
+
 // ---- frame handlers ------------------------------------------------------
 
+function applyHello(state: ChatState, frame: HelloFrame): ChatState {
+  // Presence only: no message / read / room side effects.
+  return rememberPeer(state, frame.senderId, frame.senderName);
+}
+
 function applyMsg(state: ChatState, frame: MsgFrame): ChatState {
+  const roomId = normalizeRoomId(frame.roomId);
   const message: Message = {
     id: frame.id,
     senderId: frame.senderId,
     senderName: frame.senderName,
     body: frame.body,
     createdAt: frame.createdAt,
-    roomId: normalizeRoomId(frame.roomId),
+    roomId,
     ...(frame.replyToId !== undefined ? { replyToId: frame.replyToId } : {}),
     deleted: false,
     reactions: {},
   };
-  return insertMessage(state, message);
+  let next = insertMessage(state, message);
+  // Track presence (latest name) and the room, even on a deduped no-op insert.
+  next = rememberPeer(next, frame.senderId, frame.senderName);
+  next = rememberRoom(next, roomId);
+  return next;
 }
 
 function applyReaction(state: ChatState, frame: ReactionFrame): ChatState {
@@ -224,8 +303,7 @@ export function applyFrame(state: ChatState, frame: Frame): ChatState {
     case "read":
       return applyRead(state, frame);
     case "hello":
-      // Presence is handled separately (PR-C1b+); no message-store effect.
-      return state;
+      return applyHello(state, frame);
     default: {
       // Forward compatibility: unknown frame types are ignored. The exhaustive
       // check keeps the union honest at compile time.

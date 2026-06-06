@@ -11,8 +11,12 @@ import {
   applyFrame,
   addLocalMessage,
   messagesIn,
+  addRoom,
+  roomList,
+  peerName,
   type ChatState,
 } from "./store";
+import { DEFAULT_ROOM_ID } from "./frames";
 
 // ---- helpers -------------------------------------------------------------
 
@@ -222,10 +226,27 @@ describe("applyFrame: read", () => {
 // ---- hello ---------------------------------------------------------------
 
 describe("applyFrame: hello", () => {
-  it("is a no-op for the message store", () => {
+  it("records presence (peer name) without touching messages or rooms", () => {
     const frame: Frame = { type: "hello", senderId: "alice", senderName: "Alice", protoVer: 1 };
     const s = applyFrame(initialState, frame);
-    expect(s).toEqual(initialState);
+    // presence recorded
+    expect(peerName(s, "alice")).toBe("Alice");
+    // no message-store side effects
+    expect(s.messagesByRoom).toEqual(initialState.messagesByRoom);
+    expect(s.reads).toEqual(initialState.reads);
+    // rooms untouched (hello does not introduce rooms)
+    expect(s.rooms).toEqual(initialState.rooms);
+  });
+
+  it("updates an existing peer's name (latest-wins presence)", () => {
+    let s = applyFrame(initialState, {
+      type: "hello",
+      senderId: "alice",
+      senderName: "Alice",
+      protoVer: 1,
+    });
+    s = applyFrame(s, { type: "hello", senderId: "alice", senderName: "Alice 2", protoVer: 1 });
+    expect(peerName(s, "alice")).toBe("Alice 2");
   });
 });
 
@@ -288,5 +309,80 @@ describe("immutability (11)", () => {
 describe("messagesIn", () => {
   it("returns an empty array for an unknown room", () => {
     expect(messagesIn(initialState, "nope")).toEqual([]);
+  });
+});
+
+// ---- presence / peers (C2) ----------------------------------------------
+
+describe("applyFrame: msg presence + room tracking (C2)", () => {
+  it("records the sender's name in peers and keeps it latest-wins", () => {
+    let s = applyFrame(initialState, msg({ id: "m1", roomId: "r1", senderId: "bob", senderName: "Bob" }));
+    expect(peerName(s, "bob")).toBe("Bob");
+    // a later message with a renamed display name updates the peer entry
+    s = applyFrame(s, msg({ id: "m2", roomId: "r1", senderId: "bob", senderName: "Bobby" }));
+    expect(peerName(s, "bob")).toBe("Bobby");
+  });
+
+  it("adds a newly-seen roomId to the known room list (normalized)", () => {
+    let s = applyFrame(initialState, msg({ id: "m1", roomId: "r1" }));
+    expect(roomList(s)).toContain("r1");
+    // default room is always present alongside discovered rooms
+    expect(roomList(s)).toContain(DEFAULT_ROOM_ID);
+
+    // an empty roomId normalizes to general and does not add a blank room
+    s = applyFrame(s, msg({ id: "m2", roomId: "" }));
+    expect(roomList(s)).not.toContain("");
+    expect(roomList(s)).toContain(DEFAULT_ROOM_ID);
+  });
+
+  it("does not duplicate a roomId already in the list", () => {
+    let s = applyFrame(initialState, msg({ id: "m1", roomId: "r1" }));
+    s = applyFrame(s, msg({ id: "m2", roomId: "r1" }));
+    expect(roomList(s).filter((r) => r === "r1")).toHaveLength(1);
+  });
+});
+
+describe("addRoom (C2)", () => {
+  it("adds a new room", () => {
+    const s = addRoom(initialState, "design");
+    expect(roomList(s)).toContain("design");
+  });
+
+  it("is idempotent (no duplicates)", () => {
+    let s = addRoom(initialState, "design");
+    s = addRoom(s, "design");
+    expect(roomList(s).filter((r) => r === "design")).toHaveLength(1);
+  });
+
+  it("normalizes an empty/missing room to general (no blank entry)", () => {
+    const s = addRoom(initialState, "");
+    expect(roomList(s)).not.toContain("");
+    expect(roomList(s)).toContain(DEFAULT_ROOM_ID);
+    // general already exists, so nothing new is added
+    expect(roomList(s).filter((r) => r === DEFAULT_ROOM_ID)).toHaveLength(1);
+  });
+
+  it("does not mutate the prior state", () => {
+    const before = structuredClone(initialState);
+    addRoom(initialState, "design");
+    expect(initialState).toEqual(before);
+  });
+});
+
+describe("roomList (C2)", () => {
+  it("always includes the default room", () => {
+    expect(roomList(initialState)).toContain(DEFAULT_ROOM_ID);
+  });
+
+  it("includes the default room even if a state somehow lacks it (safety union)", () => {
+    const broken: ChatState = { messagesByRoom: {}, reads: {}, rooms: ["r1"], peers: {} };
+    expect(roomList(broken)).toContain(DEFAULT_ROOM_ID);
+    expect(roomList(broken)).toContain("r1");
+  });
+});
+
+describe("peerName (C2)", () => {
+  it("returns undefined for an unknown peer", () => {
+    expect(peerName(initialState, "ghost")).toBeUndefined();
   });
 });
