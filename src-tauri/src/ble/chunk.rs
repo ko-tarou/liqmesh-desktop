@@ -23,6 +23,14 @@ pub const ATT_OVERHEAD: usize = 3;
 /// Maximum number of chunks (`total` must fit in a single byte).
 pub const MAX_CHUNKS: usize = u8::MAX as usize; // 255
 
+/// Maximum number of distinct `msgId`s a single [`Reassembler`] will reassemble
+/// concurrently. This bounds memory against a peer that opens many partial
+/// reassemblies and never finishes them (each parks up to `MAX_CHUNKS` buffers).
+/// 64 comfortably exceeds the handful of in-flight messages a real conversation
+/// produces while capping worst-case state. Eviction / timeout of stale
+/// partials is deferred to PR-B (it needs the connection-session boundary).
+pub const MAX_CONCURRENT_REASSEMBLIES: usize = 64;
+
 /// Returns the maximum payload size that fits in a single packet for the given
 /// negotiated MTU: `mtu - 3(ATT) - 6(header)`.
 ///
@@ -45,6 +53,9 @@ pub enum ChunkError {
     TotalMismatch,
     /// `total` exceeded 255 and cannot be encoded in a single byte.
     TooManyChunks,
+    /// A new `msgId` arrived while [`MAX_CONCURRENT_REASSEMBLIES`] partial
+    /// reassemblies were already in progress.
+    TooManyConcurrent,
 }
 
 /// Splits `payload` into header-prefixed packets for the given `msg_id`.
@@ -103,7 +114,12 @@ struct Partial {
 
 /// Reassembles chunked packets into complete payloads, keyed by `msgId`.
 ///
-/// Supports out-of-order delivery and multiple concurrent `msgId`s.
+/// Supports out-of-order delivery and multiple concurrent `msgId`s, up to
+/// [`MAX_CONCURRENT_REASSEMBLIES`]. Once that many partial reassemblies are open,
+/// a packet that would start a *new* `msgId` is rejected with
+/// [`ChunkError::TooManyConcurrent`]; appends to already-open `msgId`s still
+/// succeed. Timeout / eviction of stale partials is deferred to PR-B, which owns
+/// the connection-session boundary.
 #[derive(Default)]
 pub struct Reassembler {
     partials: HashMap<u32, Partial>,
@@ -132,6 +148,15 @@ impl Reassembler {
         }
         if seq >= total {
             return Err(ChunkError::SeqOutOfRange);
+        }
+
+        // Bound concurrent reassemblies. Only *new* msg_ids count against the
+        // limit; appends to an already-open msg_id always proceed (so a
+        // near-complete message at the boundary can still finish).
+        if !self.partials.contains_key(&msg_id)
+            && self.partials.len() >= MAX_CONCURRENT_REASSEMBLIES
+        {
+            return Err(ChunkError::TooManyConcurrent);
         }
 
         let entry = self.partials.entry(msg_id).or_insert_with(|| Partial {
@@ -322,6 +347,49 @@ mod tests {
         // max_payload = 1 with a 300-byte payload would need 300 chunks > 255.
         let payload = vec![0u8; 300];
         assert_eq!(split(1, &payload, 1), Err(ChunkError::TooManyChunks));
+    }
+
+    // Builds a 2-chunk-declared first packet (seq=0, total=2) for `msg_id` so
+    // the reassembly stays open (incomplete) and occupies a concurrency slot.
+    fn open_packet(msg_id: u32) -> Vec<u8> {
+        let mut pkt = msg_id.to_be_bytes().to_vec();
+        pkt.push(0); // seq
+        pkt.push(2); // total (declares 2 chunks; only one sent → stays partial)
+        pkt.push(b'x');
+        pkt
+    }
+
+    #[test]
+    fn new_reassembly_over_concurrency_limit_errors() {
+        let mut r = Reassembler::new();
+        // Open exactly MAX_CONCURRENT_REASSEMBLIES distinct msg_ids.
+        for i in 0..MAX_CONCURRENT_REASSEMBLIES as u32 {
+            assert_eq!(r.push(&open_packet(i)), Ok(None));
+        }
+        // One more *new* msg_id must be rejected.
+        assert_eq!(
+            r.push(&open_packet(MAX_CONCURRENT_REASSEMBLIES as u32)),
+            Err(ChunkError::TooManyConcurrent)
+        );
+    }
+
+    #[test]
+    fn append_to_existing_reassembly_succeeds_at_limit() {
+        let mut r = Reassembler::new();
+        for i in 0..MAX_CONCURRENT_REASSEMBLIES as u32 {
+            assert_eq!(r.push(&open_packet(i)), Ok(None));
+        }
+        // Appending the *second* chunk to an already-open msg_id (id 0) must
+        // succeed even though we are at the concurrency limit — and completes it.
+        let mut last = msg_id_to_be(0);
+        last.push(1); // seq=1
+        last.push(2); // total=2
+        last.push(b'y');
+        assert_eq!(r.push(&last), Ok(Some(vec![b'x', b'y'])));
+    }
+
+    fn msg_id_to_be(id: u32) -> Vec<u8> {
+        id.to_be_bytes().to_vec()
     }
 
     #[test]

@@ -28,6 +28,7 @@
 pub const HEADER_LEN: usize = 6;   // msgId(4)+seq(1)+total(1)
 pub const ATT_OVERHEAD: usize = 3;
 pub const MAX_CHUNKS: usize = 255; // total は 1 byte
+pub const MAX_CONCURRENT_REASSEMBLIES: usize = 64; // 同時再構成上限
 
 pub fn payload_limit(mtu: usize) -> usize; // mtu - 3 - 6, 下回ると 0 に飽和
 pub fn split(msg_id: u32, payload: &[u8], max_payload: usize)
@@ -41,12 +42,17 @@ impl Reassembler {
 
 pub enum ChunkError {
     PacketTooShort, InvalidTotal, SeqOutOfRange, TotalMismatch, TooManyChunks,
+    TooManyConcurrent,
 }
 ```
 
 挙動メモ:
-- 空 payload も 1 チャンク（total=1）。
+- 空 payload も 1 チャンク（total=1）。`max_payload == 0` は呼び出し側バグとして
+  `Err(TooManyChunks)`（panic しない・空 payload でも同じエラー経路に統一）。
 - `Reassembler` は順不同受信・複数 msgId 並行・重複 seq（冪等）に対応。
+- 同時再構成数は `MAX_CONCURRENT_REASSEMBLIES = 64` で上限。到達後の **新規 msgId** は
+  `Err(TooManyConcurrent)`、既存 msgId への追記は成功。timeout / eviction は
+  接続セッション境界を持つ **PR-B** で実装予定。
 - 完成時に該当 msgId の部分状態を破棄して `Some(payload)` を返す。
 
 ### frame.rs
