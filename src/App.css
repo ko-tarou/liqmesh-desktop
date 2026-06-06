@@ -139,6 +139,37 @@ button:disabled {
   cursor: not-allowed;
 }
 
+button.secondary {
+  color: var(--text);
+  background-color: transparent;
+  border-color: var(--panel-border);
+}
+
+button.secondary:hover:not(:disabled) {
+  background-color: #0d1117;
+  border-color: var(--brand-dim);
+}
+
+textarea.raw-frame {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 10px 0;
+  resize: vertical;
+  border-radius: 8px;
+  border: 1px solid var(--panel-border);
+  padding: 0.6em 0.8em;
+  font-size: 0.85rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text);
+  background-color: #0d1117;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+textarea.raw-frame:focus {
+  border-color: var(--brand);
+}
+
 .log-panel .log {
   max-height: 320px;
   overflow-y: auto;

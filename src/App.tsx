@@ -24,6 +24,7 @@ function App() {
   const [myName, setMyName] = useState("");
   const [body, setBody] = useState("");
   const [roomId, setRoomId] = useState("general");
+  const [rawFrame, setRawFrame] = useState("");
   const [connecting, setConnecting] = useState(false);
   const [connected, setConnected] = useState(false);
   const [log, setLog] = useState<LogEntry[]>([]);
@@ -90,8 +91,54 @@ function App() {
     }
   }
 
+  async function disconnect() {
+    append("action", "disconnect");
+    try {
+      await invoke("ble_stop");
+    } catch (e) {
+      append("error", String(e));
+    }
+    setConnected(false);
+    setConnecting(false);
+  }
+
+  /** Send the contents of the raw-frame textarea verbatim. */
+  async function sendRaw() {
+    append("action", "send raw frame");
+    try {
+      await invoke("ble_send", { frameJson: rawFrame });
+    } catch (e) {
+      append("error", String(e));
+    }
+  }
+
+  /** Insert a JSON template for a frame kind into the raw-frame editor. */
+  function insertTemplate(kind: "reaction" | "delete" | "read") {
+    let tmpl: Record<string, unknown>;
+    if (kind === "reaction") {
+      tmpl = {
+        type: "reaction",
+        messageId: "",
+        senderId: myId,
+        emoji: "👍",
+        op: "add",
+      };
+    } else if (kind === "delete") {
+      tmpl = { type: "delete", messageId: "", senderId: myId };
+    } else {
+      tmpl = {
+        type: "read",
+        roomId: roomId || "general",
+        upToMessageId: "",
+        senderId: myId,
+      };
+    }
+    setRawFrame(JSON.stringify(tmpl, null, 2));
+  }
+
   const canConnect = myId.trim() !== "" && !connecting;
   const canSend = connected && body.trim() !== "";
+  const canSendRaw = connected && rawFrame.trim() !== "";
 
   return (
     <main className="container">
@@ -121,6 +168,13 @@ function App() {
           <button onClick={connect} disabled={!canConnect}>
             {connecting ? "Connecting…" : "Connect"}
           </button>
+          <button
+            onClick={disconnect}
+            disabled={!connected && !connecting}
+            className="secondary"
+          >
+            Disconnect
+          </button>
         </div>
       </section>
 
@@ -142,6 +196,39 @@ function App() {
           />
           <button onClick={send} disabled={!canSend}>
             Send
+          </button>
+        </div>
+      </section>
+
+      <section className="panel">
+        <h2>Raw frame (interop)</h2>
+        <div className="field-row">
+          <button
+            onClick={() => insertTemplate("reaction")}
+            className="secondary"
+          >
+            Reaction
+          </button>
+          <button
+            onClick={() => insertTemplate("delete")}
+            className="secondary"
+          >
+            Delete
+          </button>
+          <button onClick={() => insertTemplate("read")} className="secondary">
+            Read
+          </button>
+        </div>
+        <textarea
+          className="raw-frame"
+          placeholder='{"type":"reaction","messageId":"…","senderId":"…","emoji":"👍","op":"add"}'
+          value={rawFrame}
+          onChange={(e) => setRawFrame(e.currentTarget.value)}
+          rows={6}
+        />
+        <div className="field-row">
+          <button onClick={sendRaw} disabled={!canSendRaw}>
+            Send raw
           </button>
         </div>
       </section>
