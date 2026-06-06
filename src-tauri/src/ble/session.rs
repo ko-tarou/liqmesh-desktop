@@ -13,6 +13,14 @@
 //! roomId default (Contract v1.2/v1.3) is applied on receive: decoded frames are
 //! run through [`Frame::normalized`] so an empty `roomId` becomes `"general"`
 //! (the serde `default` already covers a *missing* `roomId`).
+//!
+//! Security — trust-on-first-use (Contract: "senderId is bound to the
+//! connection = anti-impersonation"): on receive, the first known,
+//! protocol-compatible frame's `senderId` is bound to the connection
+//! ([`Session::peer_id`]). Every later frame must carry that same `senderId`; a
+//! mismatching one is dropped as impersonation and counted in
+//! [`Session::impersonation_rejections`]. The protocol-version check ([`PROTO_VER`])
+//! runs *before* binding, so an incompatible peer is never trusted.
 
 use super::chunk::{payload_limit, ChunkError, Reassembler};
 use super::frame::Frame;
@@ -53,6 +61,21 @@ impl From<ChunkError> for SessionError {
     }
 }
 
+/// Returns the `senderId` a frame claims, if any.
+///
+/// hello / msg / reaction / delete / read all carry a `senderId`; `Unknown` has
+/// no identity. Used by the TOFU check to bind / verify the connection's peer.
+fn frame_sender_id(frame: &Frame) -> Option<&str> {
+    match frame {
+        Frame::Hello { sender_id, .. }
+        | Frame::Msg { sender_id, .. }
+        | Frame::Reaction { sender_id, .. }
+        | Frame::Delete { sender_id, .. }
+        | Frame::Read { sender_id, .. } => Some(sender_id),
+        Frame::Unknown => None,
+    }
+}
+
 /// Sans-IO per-connection session state.
 ///
 /// Outgoing frames are encoded + chunked here (the caller writes the resulting
@@ -76,6 +99,15 @@ pub struct Session {
     /// [`PROTO_VER`]. Such a peer speaks an incompatible protocol; the frame is
     /// dropped (`Ok(None)`) and no TOFU binding occurs. PR-B2 surfaces this.
     incompatible_proto: u64,
+    /// Trust-on-first-use peer identity (Contract: "senderId is bound to the
+    /// connection — anti-impersonation"). `None` until the first known,
+    /// protocol-compatible frame carrying a `senderId` arrives; that `senderId`
+    /// is then bound here for the connection's lifetime. Any later frame whose
+    /// `senderId` differs is rejected as impersonation.
+    peer_id: Option<String>,
+    /// Count of frames dropped because their `senderId` did not match the bound
+    /// [`Session::peer_id`] (impersonation attempts). PR-B2 surfaces this.
+    impersonation_rejections: u64,
 }
 
 impl Session {
@@ -91,6 +123,8 @@ impl Session {
             next_msg_id: 0,
             protocol_violations: 0,
             incompatible_proto: 0,
+            peer_id: None,
+            impersonation_rejections: 0,
         }
     }
 
@@ -109,6 +143,20 @@ impl Session {
     /// Such frames are dropped without TOFU binding; PR-B2 surfaces this counter.
     pub fn incompatible_proto(&self) -> u64 {
         self.incompatible_proto
+    }
+
+    /// The trust-on-first-use peer identity bound to this connection, or `None`
+    /// before the first known, compatible frame carrying a `senderId` arrives.
+    /// Once bound it never changes; mismatching senders are rejected.
+    pub fn peer_id(&self) -> Option<&str> {
+        self.peer_id.as_deref()
+    }
+
+    /// Number of frames rejected because their `senderId` did not match the
+    /// bound [`Session::peer_id`] (impersonation attempts) over this session's
+    /// lifetime. PR-B2 surfaces this counter.
+    pub fn impersonation_rejections(&self) -> u64 {
+        self.impersonation_rejections
     }
 
     /// Updates the outgoing payload limit from the negotiated MTU's effective
@@ -167,12 +215,15 @@ impl Session {
     ///
     /// - `Ok(Some(frame))` — a logical message completed and decoded to a known,
     ///   normalized frame.
-    /// - `Ok(None)` — still awaiting chunks, OR the completed payload was not a
-    ///   usable frame: an `Unknown`/future `type` (forward-compat, normal) or a
-    ///   malformed known frame (decode → `None`, a protocol violation). Both are
-    ///   dropped silently here, but a malformed known frame additionally
-    ///   increments [`Session::protocol_violations`] so the loss is observable;
-    ///   PR-B2 must surface that counter via log/metrics.
+    /// - `Ok(None)` — still awaiting chunks, OR the completed payload was
+    ///   dropped for one of: an `Unknown`/future `type` (forward-compat, normal);
+    ///   a malformed known frame (decode → `None`, increments
+    ///   [`Session::protocol_violations`]); a `hello` with an incompatible
+    ///   `protoVer` (increments [`Session::incompatible_proto`], no binding); or
+    ///   a frame whose `senderId` does not match the trust-on-first-use binding
+    ///   (increments [`Session::impersonation_rejections`]). PR-B2 must surface
+    ///   these counters via log/metrics so the otherwise-invisible loss is
+    ///   observable.
     /// - `Err(ChunkError)` — a malformed packet at the chunk layer (too short,
     ///   bad `total`, etc.); surfaced so the transport can react.
     ///
@@ -200,7 +251,24 @@ impl Session {
                 self.incompatible_proto += 1;
                 Ok(None)
             }
-            Some(frame) => Ok(Some(frame.normalized())),
+            // Known, compatible frame: enforce trust-on-first-use binding of the
+            // peer's senderId before delivering it (anti-impersonation).
+            Some(frame) => {
+                match (frame_sender_id(&frame), self.peer_id.as_deref()) {
+                    // First identified frame: bind the connection to this sender.
+                    (Some(sender), None) => self.peer_id = Some(sender.to_string()),
+                    // Subsequent frame whose sender does not match the binding:
+                    // reject as impersonation and keep the original binding.
+                    (Some(sender), Some(bound)) if sender != bound => {
+                        self.impersonation_rejections += 1;
+                        return Ok(None);
+                    }
+                    // Matching sender (or a sender-less frame, which cannot
+                    // exist for a known frame today): deliver normally.
+                    _ => {}
+                }
+                Ok(Some(frame.normalized()))
+            }
         }
     }
 
@@ -432,6 +500,98 @@ mod tests {
         // Packet shorter than the 6-byte header → PacketTooShort surfaces.
         let mut rx = session("u2", "Bob");
         assert_eq!(rx.on_packet(&[0, 0, 0], 0), Err(ChunkError::PacketTooShort));
+    }
+
+    /// Encodes a frame from a *given* sender id (not necessarily the session's
+    /// own), so the rx side can be fed traffic that claims an arbitrary senderId.
+    fn msg_from(sender_id: &str, body: &str) -> Frame {
+        Frame::Msg {
+            id: "m".into(),
+            sender_id: sender_id.into(),
+            sender_name: "X".into(),
+            body: body.into(),
+            created_at: "t".into(),
+            room_id: "lobby".into(),
+            reply_to_id: None,
+        }
+    }
+
+    #[test]
+    fn first_hello_binds_peer_id() {
+        let mut rx = session("me", "Me");
+        assert_eq!(rx.peer_id(), None, "unbound before any frame");
+        let hello = Frame::Hello {
+            sender_id: "u1".into(),
+            sender_name: "U1".into(),
+            proto_ver: PROTO_VER,
+        };
+        let mut tx = session("u1", "U1");
+        let packets = tx.encode_frame(&hello).expect("encode");
+        assert_eq!(feed(&mut rx, &packets), Some(hello));
+        assert_eq!(rx.peer_id(), Some("u1"));
+        assert_eq!(rx.impersonation_rejections(), 0);
+    }
+
+    #[test]
+    fn matching_sender_passes_after_binding() {
+        let mut rx = session("me", "Me");
+        let mut tx = session("u1", "U1");
+        // Bind via hello, then a msg from the same sender must pass through.
+        let hp = tx.encode_frame(&tx.hello_frame()).expect("hello");
+        assert!(feed(&mut rx, &hp).is_some());
+
+        let msg = msg_from("u1", "hi");
+        let mp = tx.encode_frame(&msg).expect("msg");
+        assert_eq!(feed(&mut rx, &mp), Some(msg));
+        assert_eq!(rx.peer_id(), Some("u1"));
+        assert_eq!(rx.impersonation_rejections(), 0);
+    }
+
+    #[test]
+    fn mismatched_sender_is_rejected_as_impersonation() {
+        let mut rx = session("me", "Me");
+        // First bind to u1 via hello.
+        let mut tx1 = session("u1", "U1");
+        let hp = tx1.encode_frame(&tx1.hello_frame()).expect("hello");
+        assert!(feed(&mut rx, &hp).is_some());
+        assert_eq!(rx.peer_id(), Some("u1"));
+
+        // A msg claiming senderId u2 over the same connection is an impostor.
+        let mut tx2 = session("u2", "U2");
+        let imposter = msg_from("u2", "spoof");
+        let ip = tx2.encode_frame(&imposter).expect("msg");
+        assert_eq!(feed(&mut rx, &ip), None, "impersonation dropped");
+        assert_eq!(rx.impersonation_rejections(), 1);
+        assert_eq!(rx.peer_id(), Some("u1"), "binding stays on u1");
+    }
+
+    #[test]
+    fn first_frame_can_be_non_hello_and_binds() {
+        // TOFU binds on the first *known* frame carrying a senderId, not only on
+        // hello (a msg arriving first must still establish the binding).
+        let mut rx = session("me", "Me");
+        let msg = msg_from("u1", "hi");
+        let mut tx = session("u1", "U1");
+        let mp = tx.encode_frame(&msg).expect("msg");
+        assert_eq!(feed(&mut rx, &mp), Some(msg));
+        assert_eq!(rx.peer_id(), Some("u1"));
+    }
+
+    #[test]
+    fn incompatible_hello_does_not_bind_then_valid_sender_binds() {
+        // proto check precedes TOFU: an incompatible hello must NOT bind, so a
+        // subsequent compatible frame from a *different* sender binds cleanly.
+        let mut rx = session("me", "Me");
+        let bad = hello_packets("u9", 2);
+        assert_eq!(feed(&mut rx, &bad), None);
+        assert_eq!(rx.peer_id(), None, "incompatible hello must not bind");
+        assert_eq!(rx.incompatible_proto(), 1);
+
+        let msg = msg_from("u1", "hi");
+        let mut tx = session("u1", "U1");
+        let mp = tx.encode_frame(&msg).expect("msg");
+        assert_eq!(feed(&mut rx, &mp), Some(msg));
+        assert_eq!(rx.peer_id(), Some("u1"));
     }
 
     /// Builds a hello frame's packets with an explicit protoVer (the public API
