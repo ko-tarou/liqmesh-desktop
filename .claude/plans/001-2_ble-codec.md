@@ -73,15 +73,15 @@ impl Frame {
 - 未知 type / type 欠落 → `Frame::Unknown`（panic しない＝前方互換）。
   実装は「まず Value にパース（不正JSON は None）→ tagged enum へ変換、失敗時 Unknown」。
 
-## ⚠️ INTEROP OPEN QUESTION（要・司令塔確認）
+## ✅ INTEROP（RESOLVED: 0-based, confirmed by architect, matches iOS/Android）
 
-> **seq / total が 0 始まりか 1 始まりか、Contract v1/v1.1 に明記がない。**
-> 本実装は **seq = 0 始まり（0..total）/ total = チャンク総数 / total=1 は無分割** を採用。
+> **seq / total は 0 始まりで確定。** `seq ∈ 0..total` / `total = チャンク総数` /
+> `total == 1 は無分割`。architect セッションで確定し、既存 iOS/Android wire と
+> 突き合わせ済み — **3 者すべて一致、いずれの側もコード変更不要**。
 
-- Android/iOS 既存 wire 実装の seq 採番（0 始まり or 1 始まり）と一致するか、
-  architect セッションで突き合わせること。**不一致なら相互運用が壊れる**（再構成で空き seq が埋まらず永久未完成、または範囲外エラー）。
 - 採用根拠: `total` を「総数」とした方が `received == total` の完成判定が自然。多くの BLE チャンク実装も 0 始まり。
-- doc コメント（`chunk.rs` 冒頭）にも同じ注記を埋め込み済み。
+- doc コメント（`chunk.rs` 冒頭）にも RESOLVED として反映済み。
+- GitHub issue は作成しない（司令塔確認で確定済みのため不要）。
 
 ## 並行更新の記録（作業中に発生）
 

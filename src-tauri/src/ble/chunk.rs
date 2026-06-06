@@ -8,10 +8,10 @@
 //! - **`seq` is 0-based: it ranges over `0..total`**, and `total` is the chunk
 //!   count. `total == 1` means a single, unsplit packet.
 //!
-//! INTEROP OPEN QUESTION: Contract v1 does not state whether `seq`/`total` are
-//! 0-based or 1-based. This implementation adopts **0-based `seq`**
-//! (`0..total`). This must be confirmed with the architect session against the
-//! existing iOS/Android wire implementation. See
+//! INTEROP (RESOLVED): `seq`/`total` numbering is **0-based**
+//! (`seq ∈ 0..total`, `total` = chunk count, `total == 1` = unsplit). Confirmed
+//! in the architect session and matched against the existing iOS/Android wire —
+//! all three platforms agree, so no code change is required on any side. See
 //! `.claude/plans/001-2_ble-codec.md`.
 
 use std::collections::HashMap;
@@ -55,8 +55,15 @@ pub enum ChunkError {
 ///
 /// Returns [`ChunkError::TooManyChunks`] if the payload would require more than
 /// 255 chunks for the given `max_payload`.
+///
+/// `max_payload == 0` is a caller bug (a packet must carry at least one payload
+/// byte to make progress). Rather than panicking, it returns
+/// [`ChunkError::TooManyChunks`] — including for an empty payload, so the error
+/// path is unified and the bug is surfaced early at the call site.
 pub fn split(msg_id: u32, payload: &[u8], max_payload: usize) -> Result<Vec<Vec<u8>>, ChunkError> {
-    assert!(max_payload > 0, "max_payload must be > 0");
+    if max_payload == 0 {
+        return Err(ChunkError::TooManyChunks);
+    }
 
     // Even an empty payload is one chunk (total == 1, no split).
     let total = if payload.is_empty() {
@@ -295,6 +302,19 @@ mod tests {
         // second chunk for same msgId says total=3
         let p1 = [0u8, 0, 0, 1, 1, 3, b'y'];
         assert_eq!(r.push(&p1), Err(ChunkError::TotalMismatch));
+    }
+
+    #[test]
+    fn split_with_zero_max_payload_errors_not_panics() {
+        // max_payload == 0 is a caller bug; surface it as an error, never panic.
+        assert_eq!(split(1, b"x", 0), Err(ChunkError::TooManyChunks));
+    }
+
+    #[test]
+    fn split_empty_payload_with_zero_max_payload_errors() {
+        // Even an empty payload with max_payload == 0 is treated as a caller bug
+        // (unified error path for early detection), not a successful 1-chunk split.
+        assert_eq!(split(2, b"", 0), Err(ChunkError::TooManyChunks));
     }
 
     #[test]
