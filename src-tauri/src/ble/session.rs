@@ -35,6 +35,12 @@ pub struct Session {
     max_payload: usize,
     /// Monotonically-increasing id stamped on the next outgoing logical message.
     next_msg_id: u32,
+    /// Count of completed payloads that decoded to a **malformed known frame**
+    /// (`Frame::decode` → `None`). These are dropped silently here for protocol
+    /// robustness, but PR-B2 must surface this counter via log/metrics so the
+    /// otherwise-invisible loss is observable. Forward-compatible `Unknown`
+    /// frames are *not* counted (they are a normal case, not a violation).
+    protocol_violations: u64,
 }
 
 impl Session {
@@ -48,7 +54,18 @@ impl Session {
             sender_name,
             max_payload: payload_limit(DEFAULT_MTU),
             next_msg_id: 0,
+            protocol_violations: 0,
         }
+    }
+
+    /// Number of completed payloads dropped as **malformed known frames**
+    /// (`Frame::decode` → `None`) over this session's lifetime.
+    ///
+    /// Such frames are discarded by [`Session::on_packet`] while incrementing
+    /// this counter; PR-B2 should surface it via log/metrics so the loss is
+    /// observable. Forward-compatible `Unknown` frames do **not** count.
+    pub fn protocol_violations(&self) -> u64 {
+        self.protocol_violations
     }
 
     /// Updates the outgoing payload limit from the negotiated MTU's effective
@@ -100,9 +117,11 @@ impl Session {
     /// - `Ok(Some(frame))` — a logical message completed and decoded to a known,
     ///   normalized frame.
     /// - `Ok(None)` — still awaiting chunks, OR the completed payload was not a
-    ///   usable frame: an `Unknown`/future `type` or a malformed known frame
-    ///   (decode → `None`). Both are dropped silently for forward compatibility
-    ///   and protocol robustness, exactly as the codec layer specifies.
+    ///   usable frame: an `Unknown`/future `type` (forward-compat, normal) or a
+    ///   malformed known frame (decode → `None`, a protocol violation). Both are
+    ///   dropped silently here, but a malformed known frame additionally
+    ///   increments [`Session::protocol_violations`] so the loss is observable;
+    ///   PR-B2 must surface that counter via log/metrics.
     /// - `Err(ChunkError)` — a malformed packet at the chunk layer (too short,
     ///   bad `total`, etc.); surfaced so the transport can react.
     pub fn on_packet(&mut self, packet: &[u8]) -> Result<Option<Frame>, ChunkError> {
@@ -111,7 +130,14 @@ impl Session {
         };
         // Completed payload: decode + normalize. Unknown/malformed → ignore.
         match Frame::decode(&payload) {
-            Some(Frame::Unknown) | None => Ok(None),
+            // Malformed known frame: drop it, but record the violation so B2 can
+            // surface the otherwise-invisible loss.
+            None => {
+                self.protocol_violations += 1;
+                Ok(None)
+            }
+            // Forward-compatible unknown/future type: normal, not a violation.
+            Some(Frame::Unknown) => Ok(None),
             Some(frame) => Ok(Some(frame.normalized())),
         }
     }
@@ -214,13 +240,48 @@ mod tests {
     }
 
     #[test]
-    fn malformed_known_frame_is_ignored() {
-        // Known `type` but missing required fields → decode None → dropped.
+    fn malformed_known_frame_is_ignored_but_counted() {
+        // Known `type` but missing required fields → decode None → dropped, and
+        // recorded as a protocol violation so B2 can surface the loss.
         let json = br#"{"type":"msg","id":"x"}"#;
         let packets = super::super::chunk::split(8, json, payload_limit(DEFAULT_MTU))
             .expect("split");
         let mut rx = session("u2", "Bob");
         assert_eq!(feed(&mut rx, &packets), None);
+        assert_eq!(rx.protocol_violations(), 1);
+    }
+
+    #[test]
+    fn unknown_type_packet_does_not_count_as_violation() {
+        // A forward-compatible unknown `type` is a normal case, not a violation.
+        let json = br#"{"type":"typing","senderId":"u1","extra":42}"#;
+        let packets = super::super::chunk::split(11, json, payload_limit(DEFAULT_MTU))
+            .expect("split");
+        let mut rx = session("u2", "Bob");
+        assert_eq!(feed(&mut rx, &packets), None);
+        assert_eq!(rx.protocol_violations(), 0);
+    }
+
+    #[test]
+    fn encode_frame_propagates_too_many_chunks() {
+        // A 1-byte payload limit forces a large frame past the 255-chunk cap, so
+        // the ChunkError surfaces to the caller rather than being swallowed.
+        let mut tx = session("u1", "Alice");
+        tx.set_max_payload(1);
+        assert_eq!(tx.max_payload(), 1, "a positive limit must be applied");
+        let msg = Frame::Msg {
+            id: "m1".into(),
+            sender_id: "u1".into(),
+            sender_name: "Alice".into(),
+            body: "x".repeat(1000),
+            created_at: "2026-06-06T00:00:00Z".into(),
+            room_id: "lobby".into(),
+            reply_to_id: None,
+        };
+        assert_eq!(
+            tx.encode_frame(&msg),
+            Err(ChunkError::TooManyChunks)
+        );
     }
 
     #[test]
