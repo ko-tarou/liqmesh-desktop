@@ -559,6 +559,54 @@ button:disabled {
   border-color: var(--brand);
 }
 
+/* ---- bluetooth-unavailable dialog -------------------------------------- */
+
+.bt-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(8, 11, 16, 0.78);
+}
+.bt-dialog {
+  max-width: 420px;
+  width: 100%;
+  text-align: center;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 16px;
+  padding: 28px 24px;
+}
+.bt-icon {
+  font-size: 2.4rem;
+  color: var(--brand);
+  margin-bottom: 8px;
+}
+.bt-title {
+  margin: 0 0 10px;
+  font-size: 1.1rem;
+  color: var(--text);
+}
+.bt-body {
+  margin: 0 0 12px;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.bt-reason {
+  margin: 0 0 16px;
+  font-size: 0.72rem;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  word-break: break-word;
+}
+.bt-retry {
+  min-width: 120px;
+}
+
 /* ---- responsive: stack the sidebar above the room on narrow widths ----- */
 
 @media (max-width: 640px) {

@@ -4,14 +4,18 @@ import { useChatStore } from "./chat/useChatStore";
 import { useIdentity } from "./chat/useIdentity";
 import { useBle } from "./chat/useBle";
 import { useReadReceipts } from "./chat/useReadReceipts";
+import { useBleAvailability } from "./chat/useBleAvailability";
 import { ConnectionBar } from "./components/ConnectionBar";
 import { RoomList } from "./components/RoomList";
 import { MessageList } from "./components/MessageList";
 import { Composer } from "./components/Composer";
 import { DebugPanel } from "./components/DebugPanel";
+import { BluetoothDialog } from "./components/BluetoothDialog";
 
 function App() {
   const { myId, myName, setMyName } = useIdentity();
+  const { available: bleAvailable, reason: bleReason, recheck: recheckBle } =
+    useBleAvailability();
   const {
     status,
     stats,
@@ -70,6 +74,10 @@ function App() {
 
   return (
     <main className="app">
+      {bleAvailable === false && (
+        <BluetoothDialog reason={bleReason} onRetry={recheckBle} />
+      )}
+
       <ConnectionBar
         myId={myId}
         myName={myName}
