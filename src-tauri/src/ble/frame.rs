@@ -1,9 +1,11 @@
 //! BLE JSON wire frames (per `docs/BLE_CONTRACT.md`).
 //!
 //! A transport carries the FULL frame set (hello / msg / reaction / delete /
-//! read), not just `msg` — see Contract v1.1 "Transport semantics". Unknown
-//! `type` values are ignored for forward compatibility: [`Frame::decode`]
-//! returns [`Frame::Unknown`] rather than panicking.
+//! read), not just `msg` — see Contract v1.1 "Transport semantics". Missing or
+//! unrecognized `type` values are ignored for forward compatibility:
+//! [`Frame::decode`] returns [`Frame::Unknown`] rather than panicking. A
+//! **known** `type` with a malformed body, however, is a protocol violation and
+//! decodes to `None` (it is not silently downgraded to `Unknown`).
 //!
 //! JSON keys are camelCase to match the existing iOS/Android wire.
 
@@ -75,16 +77,27 @@ impl Frame {
 
     /// Parses JSON wire bytes into a [`Frame`].
     ///
-    /// Returns `None` only when the input is not valid JSON. Valid JSON with an
-    /// unknown or missing `type` decodes to [`Frame::Unknown`] so that future
-    /// frame types are silently ignored rather than dropping the connection.
+    /// Returns `None` for:
+    /// - input that is not valid JSON, and
+    /// - a frame whose `type` is **known** (`hello`/`msg`/`reaction`/`delete`/
+    ///   `read`) but whose body fails to parse (missing/wrong-typed fields) —
+    ///   this is a protocol violation and must not be silently swallowed.
+    ///
+    /// Returns `Some(Frame::Unknown)` for valid JSON whose `type` is **missing
+    /// or unrecognized**, preserving forward compatibility with future frame
+    /// types rather than dropping the connection.
     pub fn decode(bytes: &[u8]) -> Option<Frame> {
-        // First ensure it is well-formed JSON at all.
         let value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
-        // Try the strongly-typed tagged enum; unknown/missing `type` falls back.
-        match serde_json::from_value::<Frame>(value) {
-            Ok(frame) => Some(frame),
-            Err(_) => Some(Frame::Unknown),
+        let type_str = value.get("type").and_then(|v| v.as_str());
+        match type_str {
+            Some("hello") | Some("msg") | Some("reaction") | Some("delete")
+            | Some("read") => {
+                // Known type: a parse failure is a protocol violation, not an
+                // unknown frame.
+                serde_json::from_value::<Frame>(value).ok()
+            }
+            // Missing or unrecognized `type`: forward-compatible Unknown.
+            _ => Some(Frame::Unknown),
         }
     }
 }
@@ -216,6 +229,21 @@ mod tests {
     fn missing_type_decodes_to_unknown() {
         let json = br#"{"foo":"bar"}"#;
         assert_eq!(Frame::decode(json), Some(Frame::Unknown));
+    }
+
+    #[test]
+    fn known_type_with_missing_required_field_returns_none() {
+        // `msg` is a known type but is missing required fields → protocol
+        // violation, not a forward-compat unknown frame.
+        let json = br#"{"type":"msg","id":"m1"}"#;
+        assert_eq!(Frame::decode(json), None);
+    }
+
+    #[test]
+    fn known_type_with_wrong_field_type_returns_none() {
+        // `hello.protoVer` must be a number; a string is a malformed known frame.
+        let json = br#"{"type":"hello","senderId":"u1","senderName":"A","protoVer":"1"}"#;
+        assert_eq!(Frame::decode(json), None);
     }
 
     #[test]
