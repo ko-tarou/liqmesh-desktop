@@ -1,4 +1,4 @@
-# LiqMesh BLE Interop Contract v1.3
+# LiqMesh BLE Interop Contract v1.4
 
 > canonical — do not diverge; changes go through the architect session
 
@@ -27,6 +27,7 @@
   `[msgId: 4 bytes big-endian][seq: 1 byte][total: 1 byte][payload...]`
   payload 上限 = negotiatedMTU - 3(ATT) - 6(header)。受信は msgId 単位で seq/total から再構成。total=1 は無分割。
 - seq/total convention: seq is 0-based (ranges 0..total-1); total = number of chunks; total == 1 means a single unsplit packet. (All platforms confirmed aligned.)
+- Max message size: total is 1 byte, so a logical message is capped at 255 chunks. Max bytes ≈ (negotiatedMTU - 9) × 255 (≈ 59 KB at MTU 247, ≈ 3.5 KB at MTU 23). Payloads larger than this (e.g. future image transfer) require app-layer fragmentation (v2). All platforms MUST enforce the 255-chunk cap identically.
 
 ## ペイロード（既存アプリ wire と同一 JSON。未知 type は無視＝前方互換）
 
