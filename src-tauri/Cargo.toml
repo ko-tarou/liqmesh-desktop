@@ -23,9 +23,21 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Async runtime for the BLE transport actor (mpsc channels + select! + the
-# spawned `Driver::run` loop). `btleplug` (the concrete GattLink) is deferred to
-# PR-B2b-2; this PR only needs the runtime + sync primitives.
-tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }
+# spawned `Driver::run` loop, the notification pump, and the maintenance-tick
+# task). `rt-multi-thread` is needed because the long-running BLE tasks are
+# `tokio::spawn`ed onto Tauri's multi-threaded runtime; `time` drives the tick
+# interval and scan timeout.
+tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "macros", "time"] }
+# Concrete cross-platform BLE central (Windows = WinRT). 0.12 is the current
+# release; the API used here (Manager/Central/Peripheral/ScanFilter/WriteType/
+# ValueNotification) was verified against the 0.12.0 source.
+btleplug = "0.12"
+# `StreamExt::next` for draining the btleplug notification stream. No executor
+# needed (we run on tokio), so default features are off.
+futures = { version = "0.3", default-features = false, features = ["std"] }
+# Parsing/constructing the fixed GATT UUIDs. btleplug exposes `uuid::Uuid` in its
+# public API, so we depend on the same crate to name them with `from_u128`.
+uuid = "1"
 
 [dev-dependencies]
 # `test-util` is reserved for time-paused tests; the transport tests drive ticks
