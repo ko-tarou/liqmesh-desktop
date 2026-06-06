@@ -1,4 +1,4 @@
-# LiqMesh BLE Interop Contract v1.4
+# LiqMesh BLE Interop Contract v1.5
 
 > canonical — do not diverge; changes go through the architect session
 
@@ -34,6 +34,7 @@
 - hello   `{type:"hello", senderId, senderName, protoVer:1}`   ← 接続直後に双方向で必須
 - msg     `{type:"msg", id, senderId, senderName, body, createdAt, roomId, replyToId?}`
 - reaction `{type:"reaction", messageId, senderId, emoji, op}`
+- reaction `op` decode is LENIENT: only the literal string "remove" means remove; an absent or unrecognised `op` is treated as "add". (Canonical: Android `optString("op","add") != "remove"`; iOS and all platforms MUST match — never drop a reaction whose op is missing/garbage.)
 - delete  `{type:"delete", messageId, senderId}`
 - read    `{type:"read", roomId, upToMessageId, senderId}`
 - (任意) backfill: 直近 N 件を hello 後に送る
@@ -49,6 +50,7 @@ A transport carries the FULL frame set (hello / msg / reaction / delete / read),
 ## 整合 / セキュリティ
 
 - senderId は接続単位に束縛(trust-on-first-use)＝なりすまし防止。
+- `hello.senderId` MUST be non-empty. A hello with an empty senderId is rejected (not TOFU-bound / spoof-guarded); the link stays open but no identity is bound.
 - 暗号化/ペアリング(標準 BLE 以上)は v1 スコープ外。
 
 ## 相互運用テスト合格条件
