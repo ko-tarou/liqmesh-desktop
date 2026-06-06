@@ -18,6 +18,10 @@ cargo test   --manifest-path src-tauri/Cargo.toml   # 69 pure-logic tests
 npm run build                                        # frontend (tsc + vite)
 ```
 
+For the full Windows owner walkthrough (toolchain, fresh-clone commands, the
+Connect/scan flow, and the pass checklist), see
+[`docs/WINDOWS_RUNBOOK.md`](docs/WINDOWS_RUNBOOK.md).
+
 To verify the real link (`docs/BLE_CONTRACT.md` "相互運用テスト合格条件"):
 
 1. On a BLE-capable **Windows** PC, run `npm run tauri dev` (or
