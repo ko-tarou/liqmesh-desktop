@@ -61,6 +61,13 @@ export type UseBle = {
    * idempotent, so the later wire echo is a no-op.
    */
   sendDelete: (messageId: string, myId: string) => Promise<void>;
+  /**
+   * Optimistically apply + send a read high-water-mark for a room. The reducer
+   * is last-write-wins per (room, sender), so re-sending an older or equal mark
+   * is harmless; callers should still send only when the mark advances to keep
+   * the BLE link quiet.
+   */
+  sendRead: (roomId: string, upToMessageId: string, myId: string) => Promise<void>;
 };
 
 export function useBle(): UseBle {
@@ -186,6 +193,22 @@ export function useBle(): UseBle {
     [applyFrame],
   );
 
+  const sendRead = useCallback(
+    async (roomId: string, upToMessageId: string, myId: string) => {
+      const frame: Frame = { type: "read", roomId, upToMessageId, senderId: myId };
+
+      // Optimistic local apply (last-write-wins per room+sender).
+      applyFrame(frame);
+
+      try {
+        await invoke("ble_send", { frameJson: JSON.stringify(frame) });
+      } catch (e) {
+        setError(`read failed: ${String(e)}`);
+      }
+    },
+    [applyFrame],
+  );
+
   return {
     status,
     stats,
@@ -196,5 +219,6 @@ export function useBle(): UseBle {
     sendMessage,
     sendReaction,
     sendDelete,
+    sendRead,
   };
 }
