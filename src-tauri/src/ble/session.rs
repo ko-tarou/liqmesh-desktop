@@ -22,6 +22,26 @@ use super::frame::Frame;
 /// MTU is known.
 pub const DEFAULT_MTU: usize = 247;
 
+/// Errors produced while encoding an outgoing frame.
+///
+/// Wraps the chunk-layer [`ChunkError`] (via [`From`], so the chunking `?`
+/// propagates transparently) and adds [`SessionError::EncodeUnknown`] for the
+/// caller-bug case of trying to serialize a [`Frame::Unknown`], which has no
+/// wire representation.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum SessionError {
+    /// A failure in the chunking layer (e.g. payload over the 255-chunk cap).
+    Chunk(ChunkError),
+    /// Attempted to encode [`Frame::Unknown`], which has no wire form.
+    EncodeUnknown,
+}
+
+impl From<ChunkError> for SessionError {
+    fn from(e: ChunkError) -> Self {
+        SessionError::Chunk(e)
+    }
+}
+
 /// Sans-IO per-connection session state.
 ///
 /// Outgoing frames are encoded + chunked here (the caller writes the resulting
@@ -100,9 +120,17 @@ impl Session {
     /// with a fresh `msgId` and advancing the counter (`wrapping_add(1)`).
     ///
     /// Performs **no I/O** — the caller (PR-B2) writes each returned packet to
-    /// the TX characteristic in order. Propagates [`ChunkError`] (e.g. a payload
-    /// that needs more than 255 chunks at the current `max_payload`).
-    pub fn encode_frame(&mut self, frame: &Frame) -> Result<Vec<Vec<u8>>, ChunkError> {
+    /// the TX characteristic in order.
+    ///
+    /// Errors with [`SessionError::EncodeUnknown`] if `frame` is
+    /// [`Frame::Unknown`] (it has no wire representation, so encoding it is a
+    /// caller bug), and propagates chunk-layer failures as
+    /// [`SessionError::Chunk`] (e.g. a payload that needs more than 255 chunks
+    /// at the current `max_payload`).
+    pub fn encode_frame(&mut self, frame: &Frame) -> Result<Vec<Vec<u8>>, SessionError> {
+        if matches!(frame, Frame::Unknown) {
+            return Err(SessionError::EncodeUnknown);
+        }
         let bytes = frame.encode();
         let msg_id = self.next_msg_id;
         let packets = super::chunk::split(msg_id, &bytes, self.max_payload)?;
@@ -265,7 +293,8 @@ mod tests {
     #[test]
     fn encode_frame_propagates_too_many_chunks() {
         // A 1-byte payload limit forces a large frame past the 255-chunk cap, so
-        // the ChunkError surfaces to the caller rather than being swallowed.
+        // the ChunkError surfaces to the caller rather than being swallowed. It
+        // is wrapped in SessionError::Chunk via the `?`/`From` path.
         let mut tx = session("u1", "Alice");
         tx.set_max_payload(1);
         assert_eq!(tx.max_payload(), 1, "a positive limit must be applied");
@@ -280,7 +309,18 @@ mod tests {
         };
         assert_eq!(
             tx.encode_frame(&msg),
-            Err(ChunkError::TooManyChunks)
+            Err(SessionError::Chunk(ChunkError::TooManyChunks))
+        );
+    }
+
+    #[test]
+    fn encode_frame_rejects_unknown() {
+        // Frame::Unknown has no wire representation; encoding it is a caller bug
+        // and must be rejected rather than emitting an empty payload.
+        let mut tx = session("u1", "Alice");
+        assert_eq!(
+            tx.encode_frame(&Frame::Unknown),
+            Err(SessionError::EncodeUnknown)
         );
     }
 
