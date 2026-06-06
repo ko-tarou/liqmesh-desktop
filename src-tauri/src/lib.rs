@@ -3,6 +3,8 @@
 //! The frontend drives BLE over two commands and a stream of events:
 //! - [`ble_start`] scans/connects/runs the transport for one peer.
 //! - [`ble_send`] enqueues a [`Frame`] (parsed from JSON) onto the live link.
+//! - [`ble_stop`] tears the current connection down (cancels the driver +
+//!   disconnects the GATT link).
 //! - events `ble://connected | frame | stats | disconnected | error` are emitted
 //!   to the webview as the connection progresses.
 //!
@@ -16,7 +18,7 @@ use std::sync::Mutex;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use ble::central::connect_and_run;
 use ble::frame::Frame;
@@ -28,14 +30,20 @@ const OUTBOUND_CAPACITY: usize = 64;
 /// Channel capacity for link→app events.
 const EVENTS_CAPACITY: usize = 256;
 
-/// Shared Tauri state: the outbound sender of the *current* connection, if any.
+/// Shared Tauri state: the live link handles of the *current* connection.
 ///
-/// `ble_start` replaces it (dropping the previous sender, which lets the prior
-/// driver's `outbound.recv()` return `None` and wind that connection down);
-/// `ble_send` reads it to enqueue a frame.
+/// - `outbound` — `ble_send` reads it to enqueue a frame; `ble_start`/`ble_stop`
+///   replace/clear it.
+/// - `shutdown` — the one-shot stop signal for the current connection. Firing it
+///   cancels the running `Driver::run` and forces a full teardown (see
+///   [`ble::central::connect_and_run`]). `ble_start` fires the *previous* one
+///   before creating a new connection so the old driver/notif/tick tasks and
+///   GATT link are guaranteed to wind down — dropping the outbound sender alone
+///   is not sufficient because the driver's tick interval never closes.
 #[derive(Default)]
 struct BleState {
     outbound: Mutex<Option<mpsc::Sender<Frame>>>,
+    shutdown: Mutex<Option<oneshot::Sender<()>>>,
 }
 
 /// JSON-friendly rendering of [`LinkError`] for the `ble://error` event.
@@ -101,9 +109,11 @@ fn emit_event(app: &AppHandle, ev: TransportEvent) {
 /// Starts a BLE session: scans for a Contract peer, connects, and runs the
 /// transport driver, bridging its events to `ble://…` emits.
 ///
-/// A previous connection (if any) is wound down by replacing the stored outbound
-/// sender — dropping it closes the old driver's `outbound` channel. Returns once
-/// the background tasks are spawned; connection progress arrives via events.
+/// A previous connection (if any) is **explicitly torn down first**: its stored
+/// `shutdown` sender is fired, which cancels the old `Driver::run` and disconnects
+/// the old GATT link + helper tasks (see [`ble::central::connect_and_run`]). Only
+/// then are the new outbound/shutdown handles installed. Returns once the
+/// background tasks are spawned; connection progress arrives via events.
 #[tauri::command]
 async fn ble_start(
     app: AppHandle,
@@ -117,14 +127,25 @@ async fn ble_start(
 
     let (out_tx, out_rx) = mpsc::channel::<Frame>(OUTBOUND_CAPACITY);
     let (ev_tx, mut ev_rx) = mpsc::channel::<TransportEvent>(EVENTS_CAPACITY);
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
-    // Replace any prior connection's sender (drops it → old driver winds down).
+    // Stop any prior connection (cancels its driver → full teardown), then
+    // install the new link's handles.
     {
-        let mut guard = state
+        let mut shutdown_guard = state
+            .shutdown
+            .lock()
+            .map_err(|_| "BLE state lock poisoned".to_string())?;
+        if let Some(old) = shutdown_guard.take() {
+            let _ = old.send(());
+        }
+        *shutdown_guard = Some(shutdown_tx);
+
+        let mut out_guard = state
             .outbound
             .lock()
             .map_err(|_| "BLE state lock poisoned".to_string())?;
-        *guard = Some(out_tx);
+        *out_guard = Some(out_tx);
     }
 
     // Bridge driver events → webview.
@@ -135,9 +156,36 @@ async fn ble_start(
         }
     });
 
-    // Run the connection. It owns `out_rx`/`ev_tx` for the link's lifetime.
-    tokio::spawn(connect_and_run(my_id, my_name, ev_tx, out_rx));
+    // Run the connection. It owns `out_rx`/`ev_tx`/`shutdown_rx` for its lifetime.
+    tokio::spawn(connect_and_run(my_id, my_name, ev_tx, out_rx, shutdown_rx));
 
+    Ok(())
+}
+
+/// Stops the current BLE session, if any.
+///
+/// Fires the stored `shutdown` signal (cancelling the running `Driver::run` and
+/// tearing down the GATT link + helper tasks) and clears the outbound sender so
+/// subsequent `ble_send` calls fail fast. Idempotent: a no-op when nothing is
+/// connected.
+#[tauri::command]
+async fn ble_stop(state: State<'_, BleState>) -> Result<(), String> {
+    {
+        let mut shutdown_guard = state
+            .shutdown
+            .lock()
+            .map_err(|_| "BLE state lock poisoned".to_string())?;
+        if let Some(tx) = shutdown_guard.take() {
+            let _ = tx.send(());
+        }
+    }
+    {
+        let mut out_guard = state
+            .outbound
+            .lock()
+            .map_err(|_| "BLE state lock poisoned".to_string())?;
+        *out_guard = None;
+    }
     Ok(())
 }
 
@@ -179,7 +227,9 @@ pub fn run() {
             app.manage(BleState::default());
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![greet, ble_start, ble_send])
+        .invoke_handler(tauri::generate_handler![
+            greet, ble_start, ble_send, ble_stop
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
