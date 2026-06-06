@@ -22,6 +22,10 @@ For the full Windows owner walkthrough (toolchain, fresh-clone commands, the
 Connect/scan flow, and the pass checklist), see
 [`docs/WINDOWS_RUNBOOK.md`](docs/WINDOWS_RUNBOOK.md).
 
+The BLE central is portable (`btleplug` on CoreBluetooth) and also runs on
+**macOS** — see [`docs/MACOS_RUNBOOK.md`](docs/MACOS_RUNBOOK.md) for the Mac run
+steps and the dev-vs-bundle Bluetooth-permission note.
+
 To verify the real link (`docs/BLE_CONTRACT.md` "相互運用テスト合格条件"):
 
 1. On a BLE-capable **Windows** PC, run `npm run tauri dev` (or
