@@ -20,7 +20,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::{mpsc, oneshot};
 
-use ble::central::connect_and_run;
+use ble::central::{adapter_available, connect_and_run};
 use ble::frame::Frame;
 use ble::transport::{LinkError, TransportEvent};
 
@@ -213,6 +213,27 @@ async fn ble_send(state: State<'_, BleState>, frame_json: String) -> Result<(), 
     }
 }
 
+/// Result of the launch-time Bluetooth precheck (`ble_available`).
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct BleAvailability {
+    /// True when a usable Bluetooth adapter is present.
+    available: bool,
+    /// Human-readable reason when `available` is false (else `None`).
+    reason: Option<String>,
+}
+
+/// Probe whether Bluetooth is usable, so the UI can prompt the user to enable it
+/// at launch instead of letting a later scan silently fail. Never errors — the
+/// outcome is carried in the returned struct.
+#[tauri::command]
+async fn ble_available() -> BleAvailability {
+    match adapter_available().await {
+        Ok(()) => BleAvailability { available: true, reason: None },
+        Err(reason) => BleAvailability { available: false, reason: Some(reason) },
+    }
+}
+
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -228,7 +249,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            greet, ble_start, ble_send, ble_stop
+            greet, ble_start, ble_send, ble_stop, ble_available
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
