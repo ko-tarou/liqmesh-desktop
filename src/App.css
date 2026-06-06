@@ -576,6 +576,57 @@ button:disabled {
   border-color: var(--brand);
 }
 
+/* ---- nearby-peer banner ("近くに人がいます") ---------------------------- */
+
+.nearby-banner {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100% - 32px);
+  padding: 10px 18px;
+  border-radius: 999px;
+  background: var(--brand);
+  color: var(--brand-ink);
+  border: 1px solid var(--brand-dim);
+  box-shadow: 0 6px 20px rgba(45, 212, 191, 0.28);
+  font-size: 0.92rem;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+  animation: nearby-slide-in 0.28s ease;
+}
+
+.nearby-banner-icon {
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
+.nearby-banner-text strong {
+  font-weight: 800;
+}
+
+@keyframes nearby-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nearby-banner {
+    animation: none;
+  }
+}
+
 /* ---- bluetooth-unavailable dialog -------------------------------------- */
 
 .bt-overlay {
