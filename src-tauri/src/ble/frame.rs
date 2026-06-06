@@ -7,32 +7,85 @@
 //!
 //! JSON keys are camelCase to match the existing iOS/Android wire.
 
-// stub for red phase
-
 use serde::{Deserialize, Serialize};
 
 /// A single logical wire frame, internally tagged by `type`.
+///
+/// The `type` discriminator is rendered in lowerCamelCase to match the wire:
+/// `hello`, `msg`, `reaction`, `delete`, `read`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Frame {
-    Hello {},
-    Msg {},
-    Reaction {},
-    Delete {},
-    Read {},
+    /// Sent in both directions immediately after connect.
+    #[serde(rename_all = "camelCase")]
+    Hello {
+        sender_id: String,
+        sender_name: String,
+        /// Protocol version; `1` in Contract v1.
+        proto_ver: u32,
+    },
+    /// A chat message.
+    #[serde(rename_all = "camelCase")]
+    Msg {
+        id: String,
+        sender_id: String,
+        sender_name: String,
+        body: String,
+        created_at: String,
+        room_id: String,
+        /// Present only when this message is a reply.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        reply_to_id: Option<String>,
+    },
+    /// Add/remove an emoji reaction on a message.
+    #[serde(rename_all = "camelCase")]
+    Reaction {
+        message_id: String,
+        sender_id: String,
+        emoji: String,
+        /// Operation, e.g. `"add"` / `"remove"` (kept as the raw wire string).
+        op: String,
+    },
+    /// Tombstone a message.
+    #[serde(rename_all = "camelCase")]
+    Delete {
+        message_id: String,
+        sender_id: String,
+    },
+    /// Read receipt up to a given message in a room.
+    #[serde(rename_all = "camelCase")]
+    Read {
+        room_id: String,
+        up_to_message_id: String,
+        sender_id: String,
+    },
+    /// Any unrecognized `type` (forward compatibility — never panics).
+    #[serde(skip)]
     Unknown,
 }
 
 impl Frame {
     /// Serializes the frame to its JSON wire bytes.
+    ///
+    /// Serializing [`Frame::Unknown`] is a programming error (it has no wire
+    /// representation) and yields an empty buffer.
     pub fn encode(&self) -> Vec<u8> {
-        Vec::new()
+        serde_json::to_vec(self).unwrap_or_default()
     }
 
-    /// Parses JSON wire bytes into a [`Frame`], returning `None` only for
-    /// malformed JSON. Unknown `type` values decode to [`Frame::Unknown`].
-    pub fn decode(_bytes: &[u8]) -> Option<Frame> {
-        None
+    /// Parses JSON wire bytes into a [`Frame`].
+    ///
+    /// Returns `None` only when the input is not valid JSON. Valid JSON with an
+    /// unknown or missing `type` decodes to [`Frame::Unknown`] so that future
+    /// frame types are silently ignored rather than dropping the connection.
+    pub fn decode(bytes: &[u8]) -> Option<Frame> {
+        // First ensure it is well-formed JSON at all.
+        let value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+        // Try the strongly-typed tagged enum; unknown/missing `type` falls back.
+        match serde_json::from_value::<Frame>(value) {
+            Ok(frame) => Some(frame),
+            Err(_) => Some(Frame::Unknown),
+        }
     }
 }
 
