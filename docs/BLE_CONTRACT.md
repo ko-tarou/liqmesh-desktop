@@ -1,4 +1,4 @@
-# LiqMesh BLE Interop Contract v1.2
+# LiqMesh BLE Interop Contract v1.3
 
 > canonical — do not diverge; changes go through the architect session
 
@@ -26,6 +26,7 @@
 - 1 論理メッセージ(UTF-8 JSON)を分割。各パケット:
   `[msgId: 4 bytes big-endian][seq: 1 byte][total: 1 byte][payload...]`
   payload 上限 = negotiatedMTU - 3(ATT) - 6(header)。受信は msgId 単位で seq/total から再構成。total=1 は無分割。
+- seq/total convention: seq is 0-based (ranges 0..total-1); total = number of chunks; total == 1 means a single unsplit packet. (All platforms confirmed aligned.)
 
 ## ペイロード（既存アプリ wire と同一 JSON。未知 type は無視＝前方互換）
 
