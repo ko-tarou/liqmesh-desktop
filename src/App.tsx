@@ -12,6 +12,7 @@ import { MessageList } from "./components/MessageList";
 import { Composer } from "./components/Composer";
 import { DebugPanel } from "./components/DebugPanel";
 import { BluetoothDialog } from "./components/BluetoothDialog";
+import { NearbyPeerBanner } from "./components/NearbyPeerBanner";
 
 function App() {
   const { myId, myName, setMyName } = useIdentity();
@@ -22,6 +23,7 @@ function App() {
     stats,
     error,
     peerId,
+    nearbyPeer,
     connect,
     disconnect,
     sendMessage,
@@ -90,6 +92,8 @@ function App() {
       {bleAvailable === false && (
         <BluetoothDialog reason={bleReason} onRetry={recheckBle} />
       )}
+
+      <NearbyPeerBanner peer={nearbyPeer} />
 
       <ConnectionBar
         myId={myId}

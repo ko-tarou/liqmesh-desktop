@@ -9,10 +9,11 @@
  * so the composer feels instant; the later echo over `ble://frame` dedups by id.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { Frame } from "./frames";
+import { nearbyPeerToAnnounce, type NearbyPeer } from "./nearbyPeers";
 import { useChatStore } from "./useChatStore";
 
 export type BleStatus = "offline" | "connecting" | "connected";
@@ -41,6 +42,14 @@ export type UseBle = {
    * on disconnect.
    */
   peerId: string | null;
+  /**
+   * The most recently NEWLY-discovered nearby peer, for the "近くに人がいます"
+   * banner. Re-pops only for a peer we have not announced before (deduped by
+   * senderId for the hook's lifetime). `key` is a monotonic id so the banner
+   * component can treat each announcement as a distinct event even if the same
+   * name reappears. `null` until the first new peer is seen.
+   */
+  nearbyPeer: (NearbyPeer & { key: number }) | null;
   connect: (myId: string, myName: string) => Promise<void>;
   disconnect: () => Promise<void>;
   /** Optimistically store + send a chat message to the given room. */
@@ -75,6 +84,11 @@ export function useBle(): UseBle {
   const [stats, setStats] = useState<BleStats | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [peerId, setPeerId] = useState<string | null>(null);
+  const [nearbyPeer, setNearbyPeer] = useState<(NearbyPeer & { key: number }) | null>(null);
+  // Ids we have already announced (deduped, one banner per newly-seen peer).
+  // A ref (not state) so updating it never triggers a re-render on its own.
+  const announcedPeerIds = useRef<Set<string>>(new Set());
+  const nearbyKey = useRef(0);
 
   const applyFrame = useChatStore((s) => s.applyFrame);
   const addLocalMessage = useChatStore((s) => s.addLocalMessage);
@@ -102,7 +116,15 @@ export function useBle(): UseBle {
         // Track the connected peer (single-link). `hello` is the remote peer's
         // presence beacon, so it identifies who we're talking to. We don't use
         // `msg.senderId` here because that also echoes our own outgoing sends.
-        if (frame.type === "hello") setPeerId(frame.senderId);
+        if (frame.type === "hello") {
+          setPeerId(frame.senderId);
+          // Pop the nearby-peer banner once per newly-seen peer.
+          const peer = nearbyPeerToAnnounce(announcedPeerIds.current, frame);
+          if (peer) {
+            announcedPeerIds.current.add(peer.senderId);
+            setNearbyPeer({ ...peer, key: ++nearbyKey.current });
+          }
+        }
       }),
       listen<BleStats>("ble://stats", (event) => {
         setStats(event.payload);
@@ -214,6 +236,7 @@ export function useBle(): UseBle {
     stats,
     error,
     peerId,
+    nearbyPeer,
     connect,
     disconnect,
     sendMessage,
