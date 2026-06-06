@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Extra macOS Info.plist keys merged into the bundle by the Tauri CLI
+  (`tauri build`). btleplug uses CoreBluetooth on macOS 11+, which refuses to
+  start without a usage-description string — without this key the bundled .app
+  would silently fail every BLE scan.
+
+  NOTE: this only covers the BUNDLED app. `tauri dev` runs the bare
+  `target/debug/liqmesh-desktop` binary, which is NOT bundled and so does not
+  carry this plist; in dev the OS attributes the Bluetooth permission to the
+  parent terminal instead (Terminal/iTerm). See docs/MACOS_RUNBOOK.md.
+-->
+<plist version="1.0">
+  <dict>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>LiqMesh uses Bluetooth to discover and connect to nearby devices for offline mesh chat.</string>
+  </dict>
+</plist>

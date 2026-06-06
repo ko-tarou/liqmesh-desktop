@@ -18,7 +18,11 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# `devtools` keeps the WebView inspector available even in release/bundled
+# builds, so a black-screen .app can be diagnosed by reading the console
+# (right-click → Inspect Element). It is on by default in `tauri dev` (debug),
+# but bundled builds strip it unless this feature is set.
+tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
