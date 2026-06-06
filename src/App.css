@@ -171,10 +171,125 @@ button:disabled {
   border-color: var(--brand-dim);
 }
 
+.conn-peer {
+  color: var(--brand);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* ---- body layout (sidebar + room) ------------------------------------- */
+
+.app-body {
+  flex: 1;
+  display: flex;
+  gap: 14px;
+  min-height: 0;
+}
+
+/* ---- room list (sidebar) ---------------------------------------------- */
+
+.room-list {
+  flex: 0 0 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  padding: 12px;
+  min-height: 0;
+}
+
+.room-list-head {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--muted);
+  padding: 0 4px;
+}
+
+.room-list-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.room-list-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  text-align: left;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  font-weight: 500;
+  padding: 0.45em 0.6em;
+  min-height: 36px;
+  border-radius: 8px;
+}
+.room-list-item:hover {
+  background: #0d1117;
+}
+.room-list-item-active {
+  background: var(--mine);
+  border-color: var(--mine-border);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.room-list-hash {
+  color: var(--brand);
+  font-weight: 700;
+}
+.room-list-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.room-list-add {
+  display: flex;
+  gap: 6px;
+  padding-top: 4px;
+  border-top: 1px solid var(--panel-border);
+}
+.room-list-input {
+  flex: 1;
+  min-width: 0;
+  border-radius: 8px;
+  border: 1px solid var(--panel-border);
+  padding: 0.4em 0.6em;
+  font-size: 0.82rem;
+  font-family: inherit;
+  color: var(--text);
+  background-color: #0d1117;
+  outline: none;
+  transition: border-color 0.2s;
+  min-height: 36px;
+}
+.room-list-input:focus {
+  border-color: var(--brand);
+}
+.room-list-add-btn {
+  flex: 0 0 auto;
+  min-height: 36px;
+  padding: 0.4em 0.8em;
+  font-size: 0.82rem;
+}
+
 /* ---- room + message list ---------------------------------------------- */
 
 .room {
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -375,4 +490,23 @@ button:disabled {
 }
 .debug-raw:focus {
   border-color: var(--brand);
+}
+
+/* ---- responsive: stack the sidebar above the room on narrow widths ----- */
+
+@media (max-width: 640px) {
+  .app-body {
+    flex-direction: column;
+  }
+  .room-list {
+    flex: 0 0 auto;
+  }
+  .room-list-items {
+    flex-direction: row;
+    flex-wrap: wrap;
+    max-height: 120px;
+  }
+  .room-list-item {
+    width: auto;
+  }
 }

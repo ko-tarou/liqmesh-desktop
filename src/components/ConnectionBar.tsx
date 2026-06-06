@@ -4,6 +4,8 @@ type Props = {
   myId: string;
   myName: string;
   status: BleStatus;
+  /** Display name of the connected peer, if known (presence). */
+  peerName?: string;
   onNameChange: (name: string) => void;
   onConnect: () => void;
   onDisconnect: () => void;
@@ -24,11 +26,13 @@ export function ConnectionBar({
   myId,
   myName,
   status,
+  peerName,
   onNameChange,
   onConnect,
   onDisconnect,
 }: Props) {
   const isOffline = status === "offline";
+  const showPeer = status === "connected" && peerName;
 
   return (
     <header className="conn-bar">
@@ -59,6 +63,7 @@ export function ConnectionBar({
         <span className={`conn-status status-${status}`}>
           <span className="status-dot" aria-hidden="true" />
           {STATUS_LABEL[status]}
+          {showPeer && <span className="conn-peer"> · {peerName}</span>}
         </span>
       </div>
     </header>
