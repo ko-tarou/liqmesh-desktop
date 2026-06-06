@@ -14,6 +14,7 @@ import {
   addRoom,
   roomList,
   peerName,
+  peerReadUpTo,
   type ChatState,
 } from "./store";
 import { DEFAULT_ROOM_ID } from "./frames";
@@ -220,6 +221,26 @@ describe("applyFrame: read", () => {
   it("normalizes missing roomId to 'general'", () => {
     const s = applyFrame(initialState, read({ upToMessageId: "m1", senderId: "alice" }));
     expect(s.reads.general.alice).toBe("m1");
+  });
+});
+
+// ---- peerReadUpTo (C3) ---------------------------------------------------
+
+describe("peerReadUpTo (C3)", () => {
+  it("returns undefined when the peer has no read mark for the room", () => {
+    expect(peerReadUpTo(initialState, "r1", "alice")).toBeUndefined();
+  });
+
+  it("returns the high-water-mark and reflects last-write-wins", () => {
+    let s = applyFrame(initialState, read({ roomId: "r1", upToMessageId: "m1", senderId: "alice" }));
+    expect(peerReadUpTo(s, "r1", "alice")).toBe("m1");
+    s = applyFrame(s, read({ roomId: "r1", upToMessageId: "m9", senderId: "alice" }));
+    expect(peerReadUpTo(s, "r1", "alice")).toBe("m9");
+  });
+
+  it("normalizes an empty roomId to the default room", () => {
+    const s = applyFrame(initialState, read({ upToMessageId: "m3", senderId: "bob" }));
+    expect(peerReadUpTo(s, "", "bob")).toBe("m3");
   });
 });
 
