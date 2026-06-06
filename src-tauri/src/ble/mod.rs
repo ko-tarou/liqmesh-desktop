@@ -8,6 +8,7 @@
 //! binary, so dead-code warnings are silenced here.
 #![allow(dead_code)]
 
+pub mod central;
 pub mod chunk;
 pub mod frame;
 pub mod session;
