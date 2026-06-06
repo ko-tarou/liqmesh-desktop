@@ -1,11 +1,13 @@
 # LiqMesh Desktop — Windows BLE Central: Build & Run Runbook
 
-For the **iOS-advertiser ↔ Windows-central** device test. See also the README
-"BLE interop test" section and `docs/BLE_CONTRACT.md` (v1.4) for the wire contract.
+For the **phone-advertiser ↔ Windows-central** device test. See also the README
+"BLE interop test" section and `docs/BLE_CONTRACT.md` (v1.5) for the wire contract.
 
 **Role:** the Windows desktop app is **BLE central only** (Windows cannot
-advertise). It **scans for and connects to** the iPhone, which must be
-**advertising** the LiqMesh GATT service. Start the iPhone advertiser first.
+advertise). It **scans for and connects to** the phone (**iOS or Android** — both
+advertise the same LiqMesh GATT service, so the steps below are identical for
+either), which must be **advertising** the LiqMesh GATT service. Start the phone
+advertiser first.
 
 ## 0. Hardware / OS prereqs
 
@@ -72,15 +74,15 @@ In the app's top bar:
 The central scans for:
 
 - GATT **Service UUID** `B1E5C0DE-1A2B-4C3D-8E9F-000000000001` (primary match)
-- Advertised **localName** `LQM-<first 4 chars of the iPhone's id>` (secondary signal)
+- Advertised **localName** `LQM-<first 4 chars of the phone's id>` (secondary signal)
 
-On finding the iPhone it connects, subscribes to **RX** (`…0003`), writes to
+On finding the phone it connects, subscribes to **RX** (`…0003`), writes to
 **TX** (`…0002`), and sends a `hello`.
 
 **Success looks like:** the status pill flips `offline` → `connecting…` →
-**`connected`** (green). Once the iPhone's `hello` arrives, the pill also shows
-the peer's name (`· <iPhone name>`). If 20s elapse with no peer, it returns to
-`offline` with an error — re-check the iPhone is advertising and in range, then
+**`connected`** (green). Once the phone's `hello` arrives, the pill also shows
+the peer's name (`· <phone name>`). If 20s elapse with no peer, it returns to
+`offline` with an error — re-check the phone is advertising and in range, then
 click **Connect** again.
 
 (Optional) open the **"Debug · interop console"** at the bottom to watch protocol
@@ -88,13 +90,13 @@ counters and send raw `reaction`/`delete`/`read` frames for the round-trip check
 
 ## 5. PASS checklist
 
-All must hold (ref `docs/BLE_CONTRACT.md` v1.4 "相互運用テスト合格条件"):
+All must hold (ref `docs/BLE_CONTRACT.md` v1.5 "相互運用テスト合格条件"):
 
 - [ ] 1. **Scan → connect:** status reaches `connected` within 20s of clicking Connect.
 - [ ] 2. **Hello exchange:** the peer name appears in the status pill (proves the
-      iPhone's `hello` was received & parsed).
-- [ ] 3. **Bidirectional msg:** Send from Windows → appears on iPhone; send from
-      iPhone → appears in the Windows message list. Both directions.
+      phone's `hello` was received & parsed).
+- [ ] 3. **Bidirectional msg:** Send from Windows → appears on the phone; send from
+      the phone → appears in the Windows message list. Both directions.
 - [ ] 4. **Reaction round-trip:** react (👍) on one side → the chip + count updates
       on the other. Toggle off → updates on both.
 - [ ] 5. **Delete round-trip:** delete your own message on one side → shows as
@@ -109,13 +111,14 @@ All must hold (ref `docs/BLE_CONTRACT.md` v1.4 "相互運用テスト合格条�
 ## 6. Known Windows BLE caveats
 
 - btleplug uses the **WinRT** backend on Windows. The PC adapter is
-  central-capable but **cannot advertise** — that's expected; the iPhone is the
-  advertiser.
+  central-capable but **cannot advertise** — that's expected; the phone (iOS or
+  Android) is the advertiser.
 - **VMs / RDP** sessions typically block BLE; run on the physical machine, logged
   in locally.
 - **Scan never finds the peer:** confirm Bluetooth is ON in Windows Settings, the
-  adapter is BLE-capable (not BT Classic only), the iPhone is actively advertising
+  adapter is BLE-capable (not BT Classic only), the phone is actively advertising
   the LiqMesh service and within ~5–10 m, and no other app is holding an exclusive
-  connection to it.
+  connection to it. (On Android, also confirm the app has the runtime BT/location
+  permissions it needs to advertise.)
 - **Blank window on Win10:** install the WebView2 Runtime (§0) and relaunch.
 - Antivirus/Firewall may prompt on first launch of the `.exe` — allow it.
