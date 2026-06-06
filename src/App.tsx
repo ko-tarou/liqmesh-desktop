@@ -11,8 +11,17 @@ import { DebugPanel } from "./components/DebugPanel";
 
 function App() {
   const { myId, myName, setMyName } = useIdentity();
-  const { status, stats, error, peerId, connect, disconnect, sendMessage, sendReaction } =
-    useBle();
+  const {
+    status,
+    stats,
+    error,
+    peerId,
+    connect,
+    disconnect,
+    sendMessage,
+    sendReaction,
+    sendDelete,
+  } = useBle();
 
   // Room state (persisted) drives which conversation is shown. Subscribing to
   // `rooms` re-renders the switcher when a new room is discovered/added.
@@ -69,6 +78,7 @@ function App() {
                 ? (messageId, emoji, op) => sendReaction(messageId, emoji, op, myId)
                 : undefined
             }
+            onDelete={connected ? (messageId) => sendDelete(messageId, myId) : undefined}
           />
 
           <Composer

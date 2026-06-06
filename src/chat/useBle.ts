@@ -55,6 +55,12 @@ export type UseBle = {
     op: "add" | "remove",
     myId: string,
   ) => Promise<void>;
+  /**
+   * Optimistically apply + send a delete for one of my own messages. The
+   * reducer authorizes by sender (only the original author may delete) and is
+   * idempotent, so the later wire echo is a no-op.
+   */
+  sendDelete: (messageId: string, myId: string) => Promise<void>;
 };
 
 export function useBle(): UseBle {
@@ -164,5 +170,31 @@ export function useBle(): UseBle {
     [applyFrame],
   );
 
-  return { status, stats, error, peerId, connect, disconnect, sendMessage, sendReaction };
+  const sendDelete = useCallback(
+    async (messageId: string, myId: string) => {
+      const frame: Frame = { type: "delete", messageId, senderId: myId };
+
+      // Optimistic local apply (reducer enforces own-sender-only + tombstone).
+      applyFrame(frame);
+
+      try {
+        await invoke("ble_send", { frameJson: JSON.stringify(frame) });
+      } catch (e) {
+        setError(`delete failed: ${String(e)}`);
+      }
+    },
+    [applyFrame],
+  );
+
+  return {
+    status,
+    stats,
+    error,
+    peerId,
+    connect,
+    disconnect,
+    sendMessage,
+    sendReaction,
+    sendDelete,
+  };
 }
