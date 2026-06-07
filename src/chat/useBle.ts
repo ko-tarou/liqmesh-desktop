@@ -112,6 +112,11 @@ export function useBle(): UseBle {
       }),
       listen<Frame>("ble://frame", (event) => {
         const frame = event.payload;
+        // Demo/diagnostic: every inbound frame that reaches the UI. If a received
+        // `msg` is logged here but never shows in the chat, the gap is in the
+        // store/render; if a peer's `msg` never logs (but its `hello` does), the
+        // gap is in the BLE decode/reassembly upstream in Rust.
+        console.info("[ble] recv frame ←", frame.type, JSON.stringify(frame));
         applyFrame(frame);
         // Track the connected peer (single-link). `hello` is the remote peer's
         // presence beacon, so it identifies who we're talking to. We don't use
