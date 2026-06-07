@@ -399,24 +399,31 @@ mod tests {
             spawn_driver(session("me", "Me"), link, clock.closure());
         assert_eq!(ev_rx.recv().await, Some(TransportEvent::Connected));
 
-        // Bind the peer to u1 via a first msg.
+        // Bind the peer to u1 via hello (msg no longer binds — it may be relayed).
+        // The hello itself surfaces as a Frame event; consume it first.
         let mut u1 = session("u1", "U1");
-        let m1 = a_msg("u1", "first");
-        for pkt in u1.encode_frame(&m1).expect("encode") {
+        let hello = u1.hello_frame();
+        for pkt in u1.encode_frame(&hello).expect("encode") {
             in_tx.send(pkt).await.unwrap();
         }
-        assert_eq!(ev_rx.recv().await, Some(TransportEvent::Frame(m1)));
+        assert_eq!(ev_rx.recv().await, Some(TransportEvent::Frame(hello)));
 
-        // Now an impostor claiming u2 over the same connection.
+        // An impostor REACTION claiming u2 over the u1 connection. TOFU stays
+        // strict for non-msg frames, so this must be dropped. (A msg would be
+        // accepted now — that's the relay relaxation, covered in session tests.)
         let mut u2 = session("u2", "U2");
-        let spoof = a_msg("u2", "spoofed");
+        let spoof = Frame::Reaction {
+            message_id: "m1".into(),
+            sender_id: "u2".into(),
+            emoji: "👍".into(),
+            op: "add".into(),
+        };
         for pkt in u2.encode_frame(&spoof).expect("encode") {
             in_tx.send(pkt).await.unwrap();
         }
-        // ...then a second legitimate u1 frame. Inbound delivery is FIFO, so by
-        // the time this frame surfaces the impostor before it has been fully
-        // processed (and dropped). Asserting the next Frame is the legit u1 one
-        // proves the impostor never produced a Frame event.
+        // ...then a legitimate u1 msg. Inbound delivery is FIFO, so asserting the
+        // next Frame is the legit u1 one proves the impostor never produced a
+        // Frame event.
         let m2 = a_msg("u1", "second");
         for pkt in u1.encode_frame(&m2).expect("encode") {
             in_tx.send(pkt).await.unwrap();
