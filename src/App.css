@@ -1,10 +1,10 @@
-/* LIGHT Material palette — white base, green primary (#1E8E5A), shared with
-   iOS AccentColor / Android LiqMeshGreen so the screen-shared Desktop demo
-   matches the phones. MUI (ThemeProvider) themes the AppBar/tabs/badges; these
-   tokens theme the hand-rolled chat surfaces (bubbles, composer, sheets). */
+/* LIGHT Material palette — white base, green primary (#1E8E5A), the ONE brand
+   colour shared with iOS AccentColor / Android LiqMeshGreen so the screen-shared
+   Desktop demo reads white+green like the phones. These tokens theme every
+   surface (top bar, tabs, bubbles, composer, sheets); icons are lucide-react. */
 :root {
-  --bg: #ffffff;
-  --panel: #ffffff;
+  --bg: #fcfdf8; /* Android Neutral98 surface (warm off-white base) */
+  --panel: #ffffff; /* cards/bubbles sit just above the base */
   --panel-2: #f0f1ec; /* Android Neutral95 */
   --panel-border: #e2e3de; /* Android Neutral90 */
   --text: #181d19; /* Android Neutral10 */
