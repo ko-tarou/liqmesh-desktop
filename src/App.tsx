@@ -171,7 +171,7 @@ function App() {
           </>
         )}
 
-        {tab === "ai" && <AITab />}
+        {tab === "ai" && <AITab messages={messages} />}
 
         {tab === "profile" && (
           <ProfileTab

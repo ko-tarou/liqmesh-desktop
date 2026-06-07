@@ -12,6 +12,7 @@
 //! Tauri state (the outbound [`mpsc::Sender`] of the current link) and the bridge
 //! from [`TransportEvent`] to `app.emit`.
 
+mod ai;
 mod ble;
 
 use std::sync::Mutex;
@@ -260,7 +261,14 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            greet, ble_start, ble_send, ble_stop, ble_available
+            greet,
+            ble_start,
+            ble_send,
+            ble_stop,
+            ble_available,
+            ai::ai_status,
+            ai::ai_download,
+            ai::ai_ask,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
