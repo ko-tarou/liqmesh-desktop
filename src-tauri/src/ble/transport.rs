@@ -134,6 +134,7 @@ impl<L: GattLink, C: Fn() -> u64 + Send> Driver<L, C> {
         // Demo aid (visible in the `tauri dev` terminal): confirm the frame's
         // packets were written to the peer's TX characteristic.
         eprintln!("[ble] wrote {pkt_count} packet(s) to TX for {frame:?}");
+        crate::diag::line(&format!("tx wrote {pkt_count} packet(s) for {frame:?}"));
         Ok(())
     }
 
@@ -166,6 +167,11 @@ impl<L: GattLink, C: Fn() -> u64 + Send> Driver<L, C> {
                 // RX notification packet from the peer.
                 Some(pkt) = inbound.recv() => {
                     let now = (self.clock)();
+                    crate::diag::line(&format!(
+                        "rx packet len={} bytes={}",
+                        pkt.len(),
+                        crate::diag::hex(&pkt, 64)
+                    ));
                     match self.session.on_packet(&pkt, now) {
                         Ok(Some(frame)) => {
                             // Demo aid (tauri dev terminal): a packet reassembled
@@ -173,14 +179,28 @@ impl<L: GattLink, C: Fn() -> u64 + Send> Driver<L, C> {
                             // UI. If a peer's msg never reaches here but its hello
                             // does, the loss is in decode/reassembly above.
                             eprintln!("[ble] recv frame → {frame:?}");
+                            crate::diag::line(&format!("rx → DELIVER frame: {frame:?}"));
                             let _ = events.send(TransportEvent::Frame(frame)).await;
                         }
                         // Still reassembling, or the completed payload was
                         // dropped (unknown/malformed/impersonation/incompatible).
-                        Ok(None) => {}
+                        // Log the current robustness counters so the reason is
+                        // visible (e.g. a jump in protocol_violations = malformed
+                        // decode; impersonation_rejections = TOFU drop).
+                        Ok(None) => {
+                            crate::diag::line(&format!(
+                                "rx → no frame (reassembling or dropped); \
+                                 violations={} impersonation={} incompatible={}",
+                                self.session.protocol_violations(),
+                                self.session.impersonation_rejections(),
+                                self.session.incompatible_proto(),
+                            ));
+                        }
                         // Chunk-layer error (too short, bad total, …). Dropped
                         // for now; a future PR may surface it as an event.
-                        Err(_) => {}
+                        Err(e) => {
+                            crate::diag::line(&format!("rx → chunk-layer error: {e:?}"));
+                        }
                     }
                 }
                 // A frame the local app wants to send.

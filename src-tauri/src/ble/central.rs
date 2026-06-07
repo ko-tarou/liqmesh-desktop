@@ -202,8 +202,10 @@ pub async fn connect_and_run_multi(
     // discovery. We scan everything and filter in `peripheral_matches` (which
     // checks both the service UUID and the `LQM-` local name).
     if let Err(e) = adapter.start_scan(ScanFilter::default()).await {
+        crate::diag::line(&format!("start_scan FAILED: {e}"));
         return report_io(&events, format!("start_scan failed: {e}")).await;
     }
+    crate::diag::line("scan started (empty filter; matching by service UUID …0001 or LQM- name)");
 
     // Peripheral ids we currently have a live (or in-flight) task for, so the
     // poll loop never double-connects the same peer. Shared with each `run_peer`
@@ -249,6 +251,11 @@ pub async fn connect_and_run_multi(
                             set.len(),
                             *set
                         );
+                        crate::diag::line(&format!(
+                            "scan: connecting to peer id={id} connected={} peers={:?}",
+                            set.len(),
+                            *set
+                        ));
                     }
                     // Spawn an independent transport task for this peer. It owns
                     // its own broadcast receiver (outbound fan-out) and shares
@@ -297,27 +304,49 @@ async fn run_peer(
         Ok(pair) => pair,
         Err(e) => {
             eprintln!("LIQMESH desktop connect FAILED id={peer_id}: {e}");
+            crate::diag::line(&format!("peer id={peer_id} connect/resolve FAILED: {e}"));
             return report_io(&events, e).await;
         }
     };
     eprintln!("LIQMESH desktop CONNECTED id={peer_id}");
+    crate::diag::line(&format!(
+        "peer id={peer_id} CONNECTED (central); resolved TX=…0002 RX=…0003"
+    ));
 
     let mut notif_stream = match peripheral.notifications().await {
         Ok(s) => s,
-        Err(e) => return report_io(&events, format!("notifications() failed: {e}")).await,
+        Err(e) => {
+            crate::diag::line(&format!("peer id={peer_id} notifications() FAILED: {e}"));
+            return report_io(&events, format!("notifications() failed: {e}")).await;
+        }
     };
     if let Err(e) = peripheral.subscribe(&rx_char).await {
+        crate::diag::line(&format!("peer id={peer_id} subscribe(RX …0003) FAILED: {e}"));
         return report_io(&events, format!("subscribe(RX) failed: {e}")).await;
     }
+    crate::diag::line(&format!(
+        "peer id={peer_id} subscribe(RX …0003) OK — awaiting inbound notifications"
+    ));
 
     let (inbound_tx, inbound_rx) = mpsc::channel::<Vec<u8>>(CHANNEL_CAPACITY);
     let rx_uuid = rx_char.uuid;
+    let notif_peer = peer_id.clone();
     let notif_task = tokio::spawn(async move {
         while let Some(n) = notif_stream.next().await {
+            // Log EVERY notification, even ones on a different characteristic, so
+            // a wrong-char write from the peer is visible rather than silently
+            // dropped by the `uuid` filter below.
+            crate::diag::line(&format!(
+                "peer id={notif_peer} notify char={} len={} bytes={}",
+                n.uuid,
+                n.value.len(),
+                crate::diag::hex(&n.value, 64)
+            ));
             if n.uuid == rx_uuid && inbound_tx.send(n.value).await.is_err() {
                 break;
             }
         }
+        crate::diag::line(&format!("peer id={notif_peer} notify stream ended"));
     });
 
     // Adapt the shared broadcast receiver to the driver's mpsc `outbound`.
@@ -361,6 +390,7 @@ async fn run_peer(
     driver.run(inbound_rx, out_rx, tick_rx, events).await;
 
     eprintln!("LIQMESH desktop DISCONNECTED id={peer_id}");
+    crate::diag::line(&format!("peer id={peer_id} DISCONNECTED (driver loop ended)"));
     notif_task.abort();
     fanout_task.abort();
     tick_task.abort();
