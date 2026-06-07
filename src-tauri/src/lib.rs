@@ -153,10 +153,35 @@ async fn ble_start(
         *out_guard = Some(out_tx.clone());
     }
 
-    // Bridge merged per-peer events → webview.
+    // Bridge merged per-peer events → webview, AND multi-hop flood-relay.
+    //
+    // Relay (Room Model A, group only): on a NEW inbound `msg` we re-broadcast the
+    // EXACT same frame (original id/senderId/senderName/roomId/body/createdAt — no
+    // re-stamp) to every connected peer, so a message reaches the whole mesh even
+    // without full connectivity. Dedup by `msg.id` in a per-session seen-set: a
+    // msg we've already handled is neither displayed again (the store also dedups)
+    // nor relayed again — that finite-per-id rule is what prevents relay loops, so
+    // no TTL/hop field is needed (and none exists on the wire, keeping byte-compat
+    // with iOS/Android). The arrival link gets the echo too, but its remote peer
+    // dedups by the same id, so re-sending to all (not "all-but-arrival") is safe.
     let app_for_events = app.clone();
+    let relay_tx = out_tx.clone();
     tokio::spawn(async move {
+        let mut seen_msg_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
         while let Some(ev) = ev_rx.recv().await {
+            if let TransportEvent::Frame(Frame::Msg { id, .. }) = &ev {
+                // First time we see this id → relay it; otherwise drop (already
+                // displayed + relayed). New ids are inserted; repeats short-circuit.
+                if seen_msg_ids.insert(id.clone()) {
+                    if let TransportEvent::Frame(frame) = &ev {
+                        // broadcast::send errors only with zero receivers (no peers) — fine.
+                        let _ = relay_tx.send(frame.clone());
+                    }
+                } else {
+                    // Duplicate arrival: don't re-display or re-relay.
+                    continue;
+                }
+            }
             emit_event(&app_for_events, ev);
         }
     });
