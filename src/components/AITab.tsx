@@ -1,4 +1,5 @@
 import { useState } from "react";
+import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
 import { useAI } from "../chat/useAI";
 import type { Message } from "../chat/store";
 
@@ -36,9 +37,7 @@ export function AITab({ messages }: Props) {
   return (
     <div className="ai-tab-full">
       <div className="ai-head">
-        <span className="ai-icon" aria-hidden>
-          ✨
-        </span>
+        <AutoAwesomeIcon className="ai-icon" color="primary" aria-hidden />
         <div>
           <p className="ai-title">オンデバイス AI</p>
           <p className="ai-sub">端末内の LFM2-350M がチャット履歴に答えます（完全オフライン）。</p>

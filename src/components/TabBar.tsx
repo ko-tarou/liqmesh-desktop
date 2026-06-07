@@ -1,3 +1,11 @@
+import BottomNavigation from "@mui/material/BottomNavigation";
+import BottomNavigationAction from "@mui/material/BottomNavigationAction";
+import Badge from "@mui/material/Badge";
+import Paper from "@mui/material/Paper";
+import ChatIcon from "@mui/icons-material/Chat";
+import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
+import PersonIcon from "@mui/icons-material/Person";
+
 export type RootTab = "chat" | "ai" | "profile";
 
 type Props = {
@@ -7,34 +15,30 @@ type Props = {
   chatUnread?: number;
 };
 
-/** The three tabs in the unified mobile-UI order: チャット / AI / プロフィール. */
-const TABS: { id: RootTab; label: string; icon: string }[] = [
-  { id: "chat", label: "チャット", icon: "💬" },
-  { id: "ai", label: "AI", icon: "✨" },
-  { id: "profile", label: "プロフィール", icon: "👤" },
-];
-
-/** Bottom tab bar matching the iOS/Android scaffold (チャット / AI / プロフィール). */
+/**
+ * Bottom tab bar (Material) matching the iOS/Android scaffold:
+ * チャット / AI / プロフィール, with a Material Badge on チャット for unread.
+ */
 export function TabBar({ active, onSelect, chatUnread = 0 }: Props) {
   return (
-    <nav className="tab-bar" role="tablist">
-      {TABS.map((t) => (
-        <button
-          key={t.id}
-          role="tab"
-          aria-selected={active === t.id}
-          className={`tab-item${active === t.id ? " tab-item-active" : ""}`}
-          onClick={() => onSelect(t.id)}
-        >
-          <span className="tab-icon" aria-hidden>
-            {t.icon}
-            {t.id === "chat" && chatUnread > 0 && (
-              <span className="tab-badge">{chatUnread}</span>
-            )}
-          </span>
-          <span className="tab-label">{t.label}</span>
-        </button>
-      ))}
-    </nav>
+    <Paper elevation={3} square sx={{ flex: "0 0 auto" }}>
+      <BottomNavigation
+        showLabels
+        value={active}
+        onChange={(_, v) => onSelect(v as RootTab)}
+      >
+        <BottomNavigationAction
+          value="chat"
+          label="チャット"
+          icon={
+            <Badge badgeContent={chatUnread} color="error" max={99}>
+              <ChatIcon />
+            </Badge>
+          }
+        />
+        <BottomNavigationAction value="ai" label="AI" icon={<AutoAwesomeIcon />} />
+        <BottomNavigationAction value="profile" label="プロフィール" icon={<PersonIcon />} />
+      </BottomNavigation>
+    </Paper>
   );
 }
