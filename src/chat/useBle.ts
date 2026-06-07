@@ -174,8 +174,12 @@ export function useBle(): UseBle {
         createdAt,
         roomId,
       };
+      const frameJson = JSON.stringify(frame);
       try {
-        await invoke("ble_send", { frameJson: JSON.stringify(frame) });
+        await invoke("ble_send", { frameJson });
+        // Demo aid: confirm in the WebView console (devtools) that the msg frame
+        // was handed to the BLE link — i.e. Desktop's send half transmitted.
+        console.info("[ble] sent msg frame →", frameJson);
       } catch (e) {
         setError(`send failed: ${String(e)}`);
       }

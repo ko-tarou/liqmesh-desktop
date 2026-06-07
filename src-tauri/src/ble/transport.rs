@@ -127,9 +127,13 @@ impl<L: GattLink, C: Fn() -> u64 + Send> Driver<L, C> {
             // bug, not a transport failure. Drop it rather than killing the link.
             Err(_) => return Ok(()),
         };
+        let pkt_count = packets.len();
         for pkt in packets {
             self.link.write(pkt).await?;
         }
+        // Demo aid (visible in the `tauri dev` terminal): confirm the frame's
+        // packets were written to the peer's TX characteristic.
+        eprintln!("[ble] wrote {pkt_count} packet(s) to TX for {frame:?}");
         Ok(())
     }
 
