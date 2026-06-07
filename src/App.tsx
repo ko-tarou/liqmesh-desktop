@@ -13,6 +13,15 @@ import { Composer } from "./components/Composer";
 import { DebugPanel } from "./components/DebugPanel";
 import { BluetoothDialog } from "./components/BluetoothDialog";
 import { NearbyPeerBanner } from "./components/NearbyPeerBanner";
+import type { Message } from "./chat/store";
+
+// Stable empty reference for the "no messages yet" case. The selector below runs
+// through React's useSyncExternalStore (Zustand v5), which re-renders whenever
+// consecutive snapshots are not `Object.is`-equal. Returning a fresh `[]` each
+// call would never settle → "Maximum update depth exceeded" (React #185) on a
+// fresh install where the active room has no messages. A shared constant keeps
+// the reference identical across renders so the loop never starts.
+const EMPTY_MESSAGES: Message[] = [];
 
 function App() {
   const { myId, myName, setMyName } = useIdentity();
@@ -41,7 +50,7 @@ function App() {
   const peerNameOf = useChatStore((s) => s.peerName);
 
   // Subscribe to just the active room's messages; re-render only on changes.
-  const messages = useChatStore((s) => s.messagesByRoom[activeRoomId] ?? []);
+  const messages = useChatStore((s) => s.messagesByRoom[activeRoomId] ?? EMPTY_MESSAGES);
   // Subscribe to the active room's reads so the "seen" marker re-renders when a
   // peer's read high-water-mark advances.
   const roomReads = useChatStore((s) => s.reads[activeRoomId]);
