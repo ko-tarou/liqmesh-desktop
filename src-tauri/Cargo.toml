@@ -42,6 +42,13 @@ futures = { version = "0.3", default-features = false, features = ["std"] }
 # Parsing/constructing the fixed GATT UUIDs. btleplug exposes `uuid::Uuid` in its
 # public API, so we depend on the same crate to name them with `from_u128`.
 uuid = "1"
+# On-device LFM (P3): llama.cpp Rust bindings. `metal` builds the Metal backend
+# so inference is GPU-accelerated on Apple Silicon. This compiles llama.cpp via
+# cmake on first build (cmake + clang required, both present).
+llama-cpp-2 = { version = "0.1", features = ["metal"] }
+# Streaming download of the LFM2.5-350M GGUF on first run. rustls so we don't
+# need a system OpenSSL; `stream` to write the file with a live progress %.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 
 [dev-dependencies]
 # `test-util` is reserved for time-paused tests; the transport tests drive ticks

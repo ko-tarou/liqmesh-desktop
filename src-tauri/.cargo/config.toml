@@ -1,0 +1,12 @@
+# macOS deployment target for the native llama.cpp build (P3).
+#
+# llama.cpp's ggml-backend dynamic-loader uses `std::filesystem::path`, which is
+# "unavailable: introduced in macOS 10.15". Tauri's release bundle would
+# otherwise compile ggml with a lower implicit target and fail. Pin both:
+#  - MACOSX_DEPLOYMENT_TARGET — read by the `cc` crate (wrapper_*.cpp).
+#  - CMAKE_OSX_DEPLOYMENT_TARGET — passed through by llama-cpp-sys's build.rs to
+#    the CMake configure of ggml/llama (the part that actually failed).
+# 11.0 is safe: this is an arm64 (Apple Silicon) app, which is macOS 11.0+ anyway.
+[env]
+MACOSX_DEPLOYMENT_TARGET = "11.0"
+CMAKE_OSX_DEPLOYMENT_TARGET = "11.0"
