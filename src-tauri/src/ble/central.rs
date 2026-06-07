@@ -196,16 +196,22 @@ pub async fn connect_and_run_multi(
         Ok(_) => return report_io(&events, "no Bluetooth adapter found").await,
         Err(e) => return report_io(&events, format!("adapters() failed: {e}")).await,
     };
-    if let Err(e) = adapter
-        .start_scan(ScanFilter { services: vec![SERVICE_UUID] })
-        .await
-    {
+    // Empty scan filter (NOT a service-UUID filter). On macOS/CoreBluetooth a
+    // service-filtered scan misses peers whose advertised service UUID lands in
+    // the "overflow" area (notably backgrounded iOS apps) — that silently capped
+    // discovery. We scan everything and filter in `peripheral_matches` (which
+    // checks both the service UUID and the `LQM-` local name).
+    if let Err(e) = adapter.start_scan(ScanFilter::default()).await {
         return report_io(&events, format!("start_scan failed: {e}")).await;
     }
 
-    // Peripheral ids we already have a live (or in-flight) task for, so the poll
-    // loop never double-connects the same peer.
-    let mut connected: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Peripheral ids we currently have a live (or in-flight) task for, so the
+    // poll loop never double-connects the same peer. Shared with each `run_peer`
+    // so a peer that DROPS removes itself here and can be re-connected on its
+    // next advertisement (otherwise a single disconnect would permanently shrink
+    // the mesh — a cause of the "inconsistent peer counts").
+    let connected: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
     tokio::pin!(shutdown);
 
     loop {
@@ -219,22 +225,52 @@ pub async fn connect_and_run_multi(
                     Ok(f) => f,
                     Err(_) => continue, // transient; try again next tick
                 };
+                let mut discovered = 0usize;
                 for p in found {
                     let id = p.id().to_string();
-                    if connected.contains(&id) {
+                    // Cheap dedup check first (short lock, never held across await).
+                    if connected.lock().unwrap().contains(&id) {
                         continue;
                     }
+                    // `peripheral_matches` awaits a properties read — do it WITHOUT
+                    // holding the lock (a std Mutex across .await would be unsound).
                     if !peripheral_matches(&p).await {
                         continue;
                     }
-                    connected.insert(id);
+                    // Re-check + claim under the lock (another tick may have raced).
+                    {
+                        let mut set = connected.lock().unwrap();
+                        if !set.insert(id.clone()) {
+                            continue; // already claimed between the checks
+                        }
+                        discovered += 1;
+                        eprintln!(
+                            "LIQMESH desktop connecting to peer id={id} connected={} peers={:?}",
+                            set.len(),
+                            *set
+                        );
+                    }
                     // Spawn an independent transport task for this peer. It owns
                     // its own broadcast receiver (outbound fan-out) and shares
-                    // the single events sender (inbound fan-in).
+                    // the single events sender (inbound fan-in). On exit it
+                    // removes its id from `connected` so a re-advertised peer
+                    // reconnects.
                     let ev = events.clone();
                     let out_rx = outbound_tx.subscribe();
-                    let (my_id, my_name) = (my_id.clone(), my_name.clone());
-                    tokio::spawn(run_peer(p, my_id, my_name, ev, out_rx));
+                    let (pid, pname) = (my_id.clone(), my_name.clone());
+                    let set_handle = connected.clone();
+                    tokio::spawn(async move {
+                        run_peer(p, pid, pname, ev, out_rx).await;
+                        set_handle.lock().unwrap().remove(&id);
+                    });
+                }
+                if discovered > 0 {
+                    let set = connected.lock().unwrap();
+                    eprintln!(
+                        "LIQMESH desktop discovered+={discovered} connected={} peers={:?}",
+                        set.len(),
+                        *set
+                    );
                 }
             }
         }
@@ -256,10 +292,15 @@ async fn run_peer(
     events: mpsc::Sender<TransportEvent>,
     mut outbound_rx: broadcast::Receiver<Frame>,
 ) {
+    let peer_id = peripheral.id().to_string();
     let (tx_char, rx_char) = match connect_and_resolve_chars(&peripheral).await {
         Ok(pair) => pair,
-        Err(e) => return report_io(&events, e).await,
+        Err(e) => {
+            eprintln!("LIQMESH desktop connect FAILED id={peer_id}: {e}");
+            return report_io(&events, e).await;
+        }
     };
+    eprintln!("LIQMESH desktop CONNECTED id={peer_id}");
 
     let mut notif_stream = match peripheral.notifications().await {
         Ok(s) => s,
@@ -319,6 +360,7 @@ async fn run_peer(
     let driver = Driver::new(session, link, clock);
     driver.run(inbound_rx, out_rx, tick_rx, events).await;
 
+    eprintln!("LIQMESH desktop DISCONNECTED id={peer_id}");
     notif_task.abort();
     fanout_task.abort();
     tick_task.abort();
