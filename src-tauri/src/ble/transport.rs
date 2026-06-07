@@ -312,7 +312,7 @@ mod tests {
             sender_id: sender_id.into(),
             sender_name: "X".into(),
             body: body.into(),
-            created_at: "t".into(),
+            created_at: 1,
             room_id: "lobby".into(),
             reply_to_id: None,
         }

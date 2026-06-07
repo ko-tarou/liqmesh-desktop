@@ -13,7 +13,30 @@
 //! to `"general"` via serde `default`; an **empty-string** `roomId` is mapped to
 //! `"general"` by [`Frame::normalized`]. No other default is permitted.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+
+/// Lenient deserializer for `createdAt` (epoch milliseconds).
+///
+/// Accepts a JSON **number** (the contract form, what iOS/Android send/expect)
+/// OR a **string** — a numeric string is parsed as the millis; any other string
+/// (e.g. a legacy ISO-8601 value an older Desktop wrote) falls back to `0`
+/// rather than failing the whole frame. The goal is to never DROP a `msg` over a
+/// timestamp shape, matching the lenient-decode policy the other platforms use.
+fn de_epoch_millis<'de, D>(deserializer: D) -> Result<i64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum NumOrStr {
+        Num(i64),
+        Str(String),
+    }
+    Ok(match NumOrStr::deserialize(deserializer)? {
+        NumOrStr::Num(n) => n,
+        NumOrStr::Str(s) => s.trim().parse::<i64>().unwrap_or(0),
+    })
+}
 
 /// The canonical default room id (Contract v1.2/v1.3): when `roomId` is **absent
 /// or empty**, every platform falls back to the literal string `"general"`.
@@ -49,7 +72,13 @@ pub enum Frame {
         sender_id: String,
         sender_name: String,
         body: String,
-        created_at: String,
+        /// Epoch milliseconds (Contract: integer). iOS (`Int64`) and Android
+        /// (`getLong`) REQUIRE a JSON number here — an ISO string makes them
+        /// throw and drop the whole frame. We serialize a number and accept
+        /// either form on decode (number, or a numeric/ISO-ish string → best
+        /// effort) so older payloads never hard-fail. See [`de_epoch_millis`].
+        #[serde(deserialize_with = "de_epoch_millis")]
+        created_at: i64,
         /// roomId is optional-with-default per Contract v1.2/v1.3: a **missing**
         /// `roomId` key restores to `"general"` via serde `default`; an **empty
         /// string** is normalized to `"general"` by [`Frame::normalized`].
@@ -171,7 +200,7 @@ mod tests {
             sender_id: "u1".into(),
             sender_name: "Alice".into(),
             body: "hi".into(),
-            created_at: "2026-06-06T00:00:00Z".into(),
+            created_at: 1_749_168_000_000,
             room_id: "r1".into(),
             reply_to_id: Some("m0".into()),
         });
@@ -184,7 +213,7 @@ mod tests {
             sender_id: "u2".into(),
             sender_name: "Bob".into(),
             body: "yo".into(),
-            created_at: "2026-06-06T00:01:00Z".into(),
+            created_at: 1_749_168_060_000,
             room_id: "r1".into(),
             reply_to_id: None,
         });
@@ -224,7 +253,7 @@ mod tests {
             sender_id: "u1".into(),
             sender_name: "Alice".into(),
             body: "hi".into(),
-            created_at: "t".into(),
+            created_at: 1,
             room_id: "r1".into(),
             reply_to_id: None,
         };
@@ -234,6 +263,32 @@ mod tests {
         assert!(json.contains("\"senderName\""), "{json}");
         assert!(json.contains("\"createdAt\""), "{json}");
         assert!(json.contains("\"roomId\""), "{json}");
+        // CONTRACT: createdAt MUST be a JSON number (epoch ms), NOT a string —
+        // iOS (Int64) / Android (getLong) throw and drop the whole msg otherwise.
+        assert!(json.contains("\"createdAt\":1"), "createdAt must be a number: {json}");
+        assert!(!json.contains("\"createdAt\":\""), "createdAt must NOT be a string: {json}");
+    }
+
+    #[test]
+    fn created_at_decodes_from_number_and_string() {
+        // Number (the contract / phone form) decodes to the exact millis.
+        let n = br#"{"type":"msg","id":"m","senderId":"u","senderName":"A","body":"b","createdAt":1749168000000,"roomId":"r"}"#;
+        match Frame::decode(n).expect("decode num") {
+            Frame::Msg { created_at, .. } => assert_eq!(created_at, 1_749_168_000_000),
+            other => panic!("expected Msg, got {other:?}"),
+        }
+        // A numeric STRING (lenient) parses to the millis rather than failing.
+        let s = br#"{"type":"msg","id":"m","senderId":"u","senderName":"A","body":"b","createdAt":"1749168000000","roomId":"r"}"#;
+        match Frame::decode(s).expect("decode numeric str") {
+            Frame::Msg { created_at, .. } => assert_eq!(created_at, 1_749_168_000_000),
+            other => panic!("expected Msg, got {other:?}"),
+        }
+        // A non-numeric (legacy ISO) string must NOT drop the frame — falls to 0.
+        let iso = br#"{"type":"msg","id":"m","senderId":"u","senderName":"A","body":"b","createdAt":"2026-06-06T00:00:00Z","roomId":"r"}"#;
+        match Frame::decode(iso).expect("decode iso str (lenient)") {
+            Frame::Msg { created_at, .. } => assert_eq!(created_at, 0),
+            other => panic!("expected Msg, got {other:?}"),
+        }
     }
 
     #[test]
@@ -243,7 +298,7 @@ mod tests {
             sender_id: "u1".into(),
             sender_name: "A".into(),
             body: "b".into(),
-            created_at: "t".into(),
+            created_at: 1,
             room_id: "r1".into(),
             reply_to_id: None,
         };
@@ -333,7 +388,7 @@ mod tests {
             sender_id: "u1".into(),
             sender_name: "A".into(),
             body: "b".into(),
-            created_at: "t".into(),
+            created_at: 1,
             room_id: "".into(),
             reply_to_id: None,
         }

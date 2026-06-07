@@ -41,7 +41,8 @@ export type Message = {
   senderId: string;
   senderName: string;
   body: string;
-  createdAt: string;
+  /** Epoch milliseconds (integer); wire contract form across all platforms. */
+  createdAt: number;
   roomId: string;
   replyToId?: string;
   /** delete tombstone */
@@ -151,20 +152,11 @@ export function addRoom(state: ChatState, roomId: string): ChatState {
 /**
  * Total order over messages.
  *
- * Primary key: the instant `createdAt` denotes. We first compare by parsed epoch
- * (`Date.parse`) so that two equivalent timestamps written in different formats
- * (e.g. `"…Z"` vs `"+09:00"`) collate identically across platforms. If either
- * side fails to parse, or the epochs tie, we fall back to a lexical comparison of
- * the raw `createdAt` strings, and finally to `id` as a stable, total tie-break.
+ * Primary key: `createdAt` (epoch ms, integer) ascending. Ties (same instant)
+ * break by `id` ascending, giving a stable, total order across platforms.
  */
 function compareMessages(a: Message, b: Message): number {
-  const ea = Date.parse(a.createdAt);
-  const eb = Date.parse(b.createdAt);
-  if (!Number.isNaN(ea) && !Number.isNaN(eb) && ea !== eb) {
-    return ea < eb ? -1 : 1;
-  }
-  if (a.createdAt < b.createdAt) return -1;
-  if (a.createdAt > b.createdAt) return 1;
+  if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? -1 : 1;
   if (a.id < b.id) return -1;
   if (a.id > b.id) return 1;
   return 0;
@@ -268,14 +260,9 @@ function applyReaction(state: ChatState, frame: ReactionFrame): ChatState {
   return updateMessageAt(state, found.roomId, found.index, (m) => {
     const current = m.reactions[frame.emoji] ?? [];
 
-    if (frame.op === "add") {
-      if (current.includes(frame.senderId)) return m; // idempotent add
-      return {
-        ...m,
-        reactions: { ...m.reactions, [frame.emoji]: [...current, frame.senderId] },
-      };
-    }
-
+    // Lenient op (Contract, matching iOS/Android): ONLY "remove" removes;
+    // anything else — "add", missing, or an unknown value — is treated as add.
+    // A strict reading dropped reactions whose op the wire omitted/varied.
     if (frame.op === "remove") {
       if (!current.includes(frame.senderId)) return m; // nothing to remove
       const remaining = current.filter((id) => id !== frame.senderId);
@@ -288,9 +275,12 @@ function applyReaction(state: ChatState, frame: ReactionFrame): ChatState {
       return { ...m, reactions };
     }
 
-    // Unknown op (e.g. a future "toggle"): ignore rather than guessing. Strict
-    // handling keeps cross-platform behaviour predictable / forward-compatible.
-    return m;
+    // add (default)
+    if (current.includes(frame.senderId)) return m; // idempotent add
+    return {
+      ...m,
+      reactions: { ...m.reactions, [frame.emoji]: [...current, frame.senderId] },
+    };
   });
 }
 

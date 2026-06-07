@@ -28,7 +28,7 @@ function msg(over: Partial<MsgFrame> & { id: string }): MsgFrame {
     senderId: "alice",
     senderName: "Alice",
     body: "hello",
-    createdAt: "2024-01-01T00:00:00.000Z",
+    createdAt: 1_704_067_200_000, // 2024-01-01T00:00:00Z in epoch ms
     ...over,
   };
 }
@@ -76,44 +76,44 @@ describe("applyFrame: msg", () => {
 
   it("sorts by createdAt ascending regardless of apply order (3)", () => {
     let s = initialState;
-    s = applyFrame(s, msg({ id: "c", roomId: "r1", createdAt: "2024-01-03T00:00:00.000Z" }));
-    s = applyFrame(s, msg({ id: "a", roomId: "r1", createdAt: "2024-01-01T00:00:00.000Z" }));
-    s = applyFrame(s, msg({ id: "b", roomId: "r1", createdAt: "2024-01-02T00:00:00.000Z" }));
+    s = applyFrame(s, msg({ id: "c", roomId: "r1", createdAt: 1_704_240_000_000 }));
+    s = applyFrame(s, msg({ id: "a", roomId: "r1", createdAt: 1_704_067_200_000 }));
+    s = applyFrame(s, msg({ id: "b", roomId: "r1", createdAt: 1_704_153_600_000 }));
     expect(messagesIn(s, "r1").map((m) => m.id)).toEqual(["a", "b", "c"]);
   });
 
   it("tie-breaks equal createdAt by id ascending", () => {
     let s = initialState;
-    s = applyFrame(s, msg({ id: "z", roomId: "r1", createdAt: "2024-01-01T00:00:00.000Z" }));
-    s = applyFrame(s, msg({ id: "a", roomId: "r1", createdAt: "2024-01-01T00:00:00.000Z" }));
-    s = applyFrame(s, msg({ id: "m", roomId: "r1", createdAt: "2024-01-01T00:00:00.000Z" }));
+    s = applyFrame(s, msg({ id: "z", roomId: "r1", createdAt: 1_704_067_200_000 }));
+    s = applyFrame(s, msg({ id: "a", roomId: "r1", createdAt: 1_704_067_200_000 }));
+    s = applyFrame(s, msg({ id: "m", roomId: "r1", createdAt: 1_704_067_200_000 }));
     expect(messagesIn(s, "r1").map((m) => m.id)).toEqual(["a", "m", "z"]);
   });
 
   it("orders by epoch across differing valid timestamp formats (A#1)", () => {
     let s = initialState;
     // "+09:00" 08:00 == 23:00Z the day before -> must sort before the 00:00Z one.
-    s = applyFrame(s, msg({ id: "late", roomId: "r1", createdAt: "2026-06-06T00:00:00Z" }));
-    s = applyFrame(s, msg({ id: "early", roomId: "r1", createdAt: "2026-06-06T08:00:00+09:00" }));
+    s = applyFrame(s, msg({ id: "late", roomId: "r1", createdAt: 1_749_168_000_000 }));
+    s = applyFrame(s, msg({ id: "early", roomId: "r1", createdAt: 1_749_164_400_000 }));
     expect(messagesIn(s, "r1").map((m) => m.id)).toEqual(["early", "late"]);
   });
 
   it("is stable for equal instants in different formats, tie-broken by id (A#1)", () => {
     let s = initialState;
     // 09:00+09:00 == 00:00Z -> same epoch; falls through to id tie-break.
-    s = applyFrame(s, msg({ id: "z", roomId: "r1", createdAt: "2026-06-06T09:00:00+09:00" }));
-    s = applyFrame(s, msg({ id: "a", roomId: "r1", createdAt: "2026-06-06T00:00:00Z" }));
+    s = applyFrame(s, msg({ id: "z", roomId: "r1", createdAt: 1_749_168_000_000 }));
+    s = applyFrame(s, msg({ id: "a", roomId: "r1", createdAt: 1_749_168_000_000 }));
     expect(messagesIn(s, "r1").map((m) => m.id)).toEqual(["a", "z"]);
   });
 
-  it("does not throw on invalid createdAt and falls back to id ordering (A#1)", () => {
+  it("orders a zero/missing timestamp before real ones, tie-broken by id", () => {
+    // createdAt is now epoch ms (number). A 0 (e.g. a lenient-decoded legacy/bad
+    // value) simply sorts earliest; equal values fall through to the id tie-break.
     let s = initialState;
-    expect(() => {
-      s = applyFrame(s, msg({ id: "b", roomId: "r1", createdAt: "not-a-date" }));
-      s = applyFrame(s, msg({ id: "a", roomId: "r1", createdAt: "also-bad" }));
-    }).not.toThrow();
-    // both unparseable + lexically equal-ish -> id tie-break decides order
-    expect(messagesIn(s, "r1").map((m) => m.id)).toEqual(["a", "b"]);
+    s = applyFrame(s, msg({ id: "b", roomId: "r1", createdAt: 0 }));
+    s = applyFrame(s, msg({ id: "a", roomId: "r1", createdAt: 0 }));
+    s = applyFrame(s, msg({ id: "c", roomId: "r1", createdAt: 1_704_067_200_000 }));
+    expect(messagesIn(s, "r1").map((m) => m.id)).toEqual(["a", "b", "c"]);
   });
 
   it("defaults missing/empty roomId to 'general' (4)", () => {
@@ -169,15 +169,21 @@ describe("applyFrame: reaction", () => {
     expect(messagesIn(s, "r1")[0].reactions).toEqual({ "👍": ["alice"] });
   });
 
-  it("ignores an unknown op rather than treating it as remove (A#2)", () => {
+  it("treats a non-remove op as add (lenient; matches phones/contract) (A#2)", () => {
+    // Contract: ONLY op === "remove" removes; anything else (incl. unknown or
+    // missing) is an add. A new sender with an unknown op must be ADDED.
     let s = base();
     s = applyFrame(s, reaction({ messageId: "m1", emoji: "👍", senderId: "alice", op: "add" }));
-    const before = s;
-    // A future/unknown op like "toggle" must NOT remove the existing reaction.
-    const unknownOp = reaction({ messageId: "m1", emoji: "👍", senderId: "alice" });
+    const unknownOp = reaction({ messageId: "m1", emoji: "👍", senderId: "bob" });
     const next = applyFrame(s, { ...unknownOp, op: "toggle" as ReactionFrame["op"] });
-    expect(next).toEqual(before);
-    expect(messagesIn(next, "r1")[0].reactions).toEqual({ "👍": ["alice"] });
+    expect(messagesIn(next, "r1")[0].reactions).toEqual({ "👍": ["alice", "bob"] });
+  });
+
+  it("treats a missing/empty op as add (lenient)", () => {
+    let s = base();
+    const noOp = reaction({ messageId: "m1", emoji: "🎉", senderId: "alice" });
+    const next = applyFrame(s, { ...noOp, op: "" as ReactionFrame["op"] });
+    expect(messagesIn(next, "r1")[0].reactions).toEqual({ "🎉": ["alice"] });
   });
 });
 
@@ -250,9 +256,9 @@ describe("peerReadUpTo (C3)", () => {
 describe("unreadCount (C3)", () => {
   // Three messages from alice (the peer); "me" is bob.
   function withPeerMessages(): ChatState {
-    let s = applyFrame(initialState, msg({ id: "a", roomId: "r1", createdAt: "2024-01-01T00:00:01Z" }));
-    s = applyFrame(s, msg({ id: "b", roomId: "r1", createdAt: "2024-01-01T00:00:02Z" }));
-    s = applyFrame(s, msg({ id: "c", roomId: "r1", createdAt: "2024-01-01T00:00:03Z" }));
+    let s = applyFrame(initialState, msg({ id: "a", roomId: "r1", createdAt: 1_704_067_201_000 }));
+    s = applyFrame(s, msg({ id: "b", roomId: "r1", createdAt: 1_704_067_202_000 }));
+    s = applyFrame(s, msg({ id: "c", roomId: "r1", createdAt: 1_704_067_203_000 }));
     return s;
   }
 
@@ -272,7 +278,7 @@ describe("unreadCount (C3)", () => {
 
   it("excludes my own messages and tombstones", () => {
     let s = withPeerMessages();
-    s = applyFrame(s, msg({ id: "mine", roomId: "r1", senderId: "bob", createdAt: "2024-01-01T00:00:04Z" }));
+    s = applyFrame(s, msg({ id: "mine", roomId: "r1", senderId: "bob", createdAt: 1_704_067_204_000 }));
     s = applyFrame(s, del({ messageId: "c", senderId: "alice" })); // alice deletes her own c
     // a, b remain unread (mine excluded, c tombstoned).
     expect(unreadCount(s, "r1", "bob")).toBe(2);
@@ -315,7 +321,7 @@ describe("addLocalMessage", () => {
       senderId: "me",
       senderName: "Me",
       body: "hi",
-      createdAt: "2024-01-01T00:00:00.000Z",
+      createdAt: 1_704_067_200_000,
       roomId: "",
     });
     expect(messagesIn(s, "general")).toHaveLength(1);
@@ -328,7 +334,7 @@ describe("addLocalMessage", () => {
       senderId: "me",
       senderName: "Me",
       body: "hi",
-      createdAt: "2024-01-01T00:00:00.000Z",
+      createdAt: 1_704_067_200_000,
       roomId: "r1",
     });
     // echo back via the wire path -> still one

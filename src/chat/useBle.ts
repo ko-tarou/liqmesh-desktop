@@ -188,7 +188,9 @@ export function useBle(): UseBle {
   const sendMessage = useCallback(
     async (body: string, roomId: string, myId: string, myName: string) => {
       const id = crypto.randomUUID();
-      const createdAt = new Date().toISOString();
+      // Epoch milliseconds (integer) — the wire contract form. An ISO string
+      // here makes iOS/Android throw and drop the whole msg (the chat-killer).
+      const createdAt = Date.now();
 
       // Optimistic local insert (deduped against the later wire echo by id).
       addLocalMessage({ id, senderId: myId, senderName: myName, body, createdAt, roomId });

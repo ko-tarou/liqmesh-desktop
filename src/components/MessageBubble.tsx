@@ -19,11 +19,10 @@ type Props = {
   seen?: boolean;
 };
 
-/** Compact wall-clock time for a message's createdAt (falls back to raw). */
-function formatTime(iso: string): string {
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return iso;
-  return new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+/** Compact wall-clock time for a message's createdAt (epoch ms). */
+function formatTime(epochMs: number): string {
+  if (!epochMs) return "";
+  return new Date(epochMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
 export function MessageBubble({ message, mine, myId, onReact, onDelete, seen }: Props) {
@@ -58,7 +57,9 @@ export function MessageBubble({ message, mine, myId, onReact, onDelete, seen }: 
         )}
 
         <div className="msg-meta">
-          <time dateTime={message.createdAt}>{formatTime(message.createdAt)}</time>
+          <time dateTime={message.createdAt ? new Date(message.createdAt).toISOString() : undefined}>
+            {formatTime(message.createdAt)}
+          </time>
           {mine && seen && !message.deleted && (
             <span className="msg-seen" title="相手が既読">
               ✓ seen
