@@ -28,6 +28,11 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+
+  /* Pin a LIGHT color scheme so WebView2 (Windows) does NOT apply the OS dark
+     user-agent style to form controls — without this, text inputs render with a
+     black background on a dark-themed Windows. */
+  color-scheme: light;
 }
 
 * {
@@ -36,6 +41,24 @@
 
 body {
   margin: 0;
+}
+
+/* Global form-control baseline: force white bg + dark text everywhere so inputs
+   are readable on Windows (WebView2 dark UA forms) regardless of per-class
+   styling. Per-component rules (.conn-name, .composer-input, …) layer on top. */
+input,
+textarea,
+select {
+  background: #ffffff;
+  color: #1a1a1a;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  font: inherit;
+}
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted);
+  opacity: 1; /* Firefox/WebView dims placeholders by default */
 }
 
 /* ---- shell (full-width — fills the window, no centering) ---------------- */
@@ -461,7 +484,7 @@ body {
   font-size: 0.9rem;
   font-family: inherit;
   color: var(--text);
-  background-color: #0d1117;
+  background-color: #ffffff;
   outline: none;
   transition: border-color 0.2s;
   min-height: 40px;
@@ -535,7 +558,7 @@ button:disabled {
   border: 1px solid var(--panel-border);
 }
 .btn-secondary:hover:not(:disabled) {
-  background-color: #0d1117;
+  background-color: var(--panel-2);
   border-color: var(--brand-dim);
 }
 
@@ -604,7 +627,7 @@ button:disabled {
   border-radius: 8px;
 }
 .room-list-item:hover {
-  background: #0d1117;
+  background: var(--panel-2);
 }
 .room-list-item-active {
   background: var(--mine);
@@ -655,7 +678,7 @@ button:disabled {
   font-size: 0.82rem;
   font-family: inherit;
   color: var(--text);
-  background-color: #0d1117;
+  background-color: #ffffff;
   outline: none;
   transition: border-color 0.2s;
   min-height: 36px;
@@ -793,7 +816,7 @@ button:disabled {
 .reaction-chip {
   font-size: 0.75rem;
   color: var(--text);
-  background: #0d1117;
+  background: var(--panel-2);
   border: 1px solid var(--panel-border);
   border-radius: 999px;
   padding: 1px 8px;
@@ -838,7 +861,7 @@ button:disabled {
   cursor: pointer;
 }
 .react-add:hover {
-  background: #0d1117;
+  background: var(--panel-2);
   border-color: var(--panel-border);
 }
 /* Delete my own message — muted until hovered, then a soft danger tone. */
@@ -878,7 +901,7 @@ button:disabled {
   font-size: 0.95rem;
   font-family: inherit;
   color: var(--text);
-  background-color: #0d1117;
+  background-color: #ffffff;
   outline: none;
   transition: border-color 0.2s;
   min-height: 44px;
@@ -936,7 +959,7 @@ button:disabled {
   font-size: 0.82rem;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   color: var(--text);
-  background-color: #0d1117;
+  background-color: #ffffff;
   outline: none;
   margin-bottom: 8px;
 }
