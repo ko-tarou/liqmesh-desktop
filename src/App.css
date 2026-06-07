@@ -298,6 +298,40 @@ body {
 .ai-input {
   flex: 1;
 }
+.ai-run {
+  flex: 1;
+}
+
+/* segmented control: チャット / 要約 / 優先順位 */
+.ai-modes {
+  display: flex;
+  gap: 4px;
+  flex: 0 0 auto;
+  background: var(--panel-2);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  padding: 4px;
+}
+.ai-mode {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 8px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ai-mode-active {
+  background: var(--panel);
+  color: var(--brand);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
 .ai-error {
   margin: 0;
   color: var(--danger);

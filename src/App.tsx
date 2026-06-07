@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { DEFAULT_ROOM_ID } from "./chat/frames";
 import { useChatStore } from "./chat/useChatStore";
 import { unreadCount } from "./chat/store";
+import { buildDemoSeed } from "./chat/seedDemo";
 import { useIdentity } from "./chat/useIdentity";
 import { useBle } from "./chat/useBle";
 import { useReadReceipts } from "./chat/useReadReceipts";
@@ -71,6 +72,21 @@ function App() {
 
   const peers = useChatStore((s) => s.peers);
   const clearChat = useChatStore((s) => s.clear);
+  const addLocalMessage = useChatStore((s) => s.addLocalMessage);
+
+  // Demo seed (once per install, only when the general room is empty): populate a
+  // realistic disaster-mesh conversation so the app looks in-use and the AI
+  // 要約/優先順位 demos have material. Idempotent — buildDemoSeed checks the
+  // persisted flag and never overwrites real messages.
+  useEffect(() => {
+    const general = useChatStore.getState().messagesByRoom[DEFAULT_ROOM_ID] ?? [];
+    const seeds = buildDemoSeed(Date.now(), general.length > 0);
+    for (const m of seeds) {
+      const { deleted: _d, reactions: _r, ...rest } = m;
+      addLocalMessage(rest);
+    }
+    // Run once on mount; addLocalMessage is a stable store action.
+  }, [addLocalMessage]);
 
   // Room Model A: one shared "general" group room. No per-peer DMs, no room
   // switcher — the チャット tab always shows "general".
