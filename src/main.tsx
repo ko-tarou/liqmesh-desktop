@@ -1,5 +1,8 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+import { ThemeProvider } from "@mui/material/styles";
+import CssBaseline from "@mui/material/CssBaseline";
+import { theme } from "./theme";
 import App from "./App";
 
 /**
@@ -31,7 +34,10 @@ window.addEventListener("unhandledrejection", (e) => showFatal("unhandled reject
 try {
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>
-      <App />
+      <ThemeProvider theme={theme}>
+        <CssBaseline />
+        <App />
+      </ThemeProvider>
     </React.StrictMode>,
   );
 } catch (err) {

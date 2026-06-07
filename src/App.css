@@ -1,21 +1,25 @@
+/* LIGHT Material palette — white base, green primary (#1E8E5A), shared with
+   iOS AccentColor / Android LiqMeshGreen so the screen-shared Desktop demo
+   matches the phones. MUI (ThemeProvider) themes the AppBar/tabs/badges; these
+   tokens theme the hand-rolled chat surfaces (bubbles, composer, sheets). */
 :root {
-  --bg: #0e1116;
-  --panel: #161b22;
-  --panel-2: #1b212b;
-  --panel-border: #232a33;
-  --text: #e6edf3;
-  --muted: #8b949e;
-  --brand: #2dd4bf;
-  --brand-dim: #14b8a6;
-  --brand-ink: #06231f;
-  --mine: #134e4a;
-  --mine-border: #1f7a72;
-  --theirs: #1b212b;
-  --danger: #f87171;
-  --ok: #34d399;
-  --warn: #fbbf24;
+  --bg: #ffffff;
+  --panel: #ffffff;
+  --panel-2: #f0f1ec; /* Android Neutral95 */
+  --panel-border: #e2e3de; /* Android Neutral90 */
+  --text: #181d19; /* Android Neutral10 */
+  --muted: #424842; /* Android onSurfaceVariant */
+  --brand: #1e8e5a; /* THE brand green */
+  --brand-dim: #1a7d50;
+  --brand-ink: #ffffff; /* onPrimary */
+  --mine: #b7f2c9; /* Android primaryContainer (my bubble) */
+  --mine-border: #8fd9ad;
+  --theirs: #f0f1ec; /* received bubble = surface variant */
+  --danger: #ba1a1a;
+  --ok: #1e8e5a;
+  --warn: #8a6d00;
 
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   font-size: 15px;
   line-height: 1.5;
   color: var(--text);
@@ -34,14 +38,14 @@ body {
   margin: 0;
 }
 
-/* ---- shell ------------------------------------------------------------- */
+/* ---- shell (full-width — fills the window, no centering) ---------------- */
 
 .app {
-  max-width: 860px;
-  margin: 0 auto;
+  width: 100%;
   height: 100vh;
   display: flex;
   flex-direction: column;
+  background: var(--bg);
 }
 
 /* ---- unified mobile-UI scaffold: top bar / tab content / bottom tabs ---- */
