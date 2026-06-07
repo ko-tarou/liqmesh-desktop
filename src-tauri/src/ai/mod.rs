@@ -23,7 +23,7 @@ use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
-use llama_cpp_2::model::{AddBos, LlamaModel, Special};
+use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaChatTemplate, LlamaModel, Special};
 use llama_cpp_2::sampling::LlamaSampler;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
@@ -125,6 +125,57 @@ pub async fn ai_ask(app: AppHandle, question: String, history: String) -> Result
         .map_err(|e| format!("inference task panicked: {e}"))?
 }
 
+/// The system instruction that grounds the assistant in the local chat history
+/// and pins the answer language to Japanese. Kept as a `system` chat turn so the
+/// model treats it as its persona rather than as user content.
+const SYSTEM_PROMPT: &str = "あなたは LiqMesh のオフライン AI アシスタントです。\
+     近くのチャット履歴をふまえて、ユーザーの質問に日本語で簡潔に答えてください。";
+
+/// Builds the inference prompt by applying **LFM2's chat template** to a
+/// system + user turn pair.
+///
+/// Prefers the template **baked into the GGUF** ([`LlamaModel::chat_template`])
+/// — that is the model author's exact format and the most robust choice. If the
+/// GGUF ships without one (some quantized exports strip it),
+/// [`ChatTemplateError::MissingTemplate`] is handled by falling back to the
+/// built-in `"chatml"` template: LFM2's format *is* ChatML
+/// (`<|im_start|>role … <|im_end|>`), so the fallback is wire-compatible for the
+/// demo (the model's BOS is still prepended by tokenization-time defaults).
+///
+/// The chat history is folded into the user turn (rather than replayed as
+/// separate assistant/user turns) because it is free-form mesh chat, not a
+/// structured prior conversation with this assistant.
+///
+/// `add_ass = true` makes the rendered prompt end with the open assistant tag so
+/// the model continues *as the assistant* instead of emitting its own opening
+/// tag (and possibly stray text).
+fn build_chat_prompt(
+    model: &LlamaModel,
+    question: &str,
+    history: &str,
+) -> Result<String, String> {
+    let user_content = format!(
+        "=== 近くのチャット履歴 ===\n{history}\n=== 質問 ===\n{question}"
+    );
+    let messages = vec![
+        LlamaChatMessage::new("system".to_string(), SYSTEM_PROMPT.to_string())
+            .map_err(|e| format!("system message: {e}"))?,
+        LlamaChatMessage::new("user".to_string(), user_content)
+            .map_err(|e| format!("user message: {e}"))?,
+    ];
+
+    // Prefer the model's own template; fall back to ChatML if it has none.
+    let template = match model.chat_template(None) {
+        Ok(t) => t,
+        Err(_) => LlamaChatTemplate::new("chatml")
+            .map_err(|e| format!("chatml fallback template: {e}"))?,
+    };
+
+    model
+        .apply_chat_template(&template, &messages, true)
+        .map_err(|e| format!("apply chat template: {e}"))
+}
+
 /// Blocking inference: load model → build prompt → greedy-decode a streamed
 /// answer. Emits `ai://token` per piece and `ai://done` at the end.
 ///
@@ -146,15 +197,16 @@ fn generate(app: &AppHandle, path: &PathBuf, question: &str, history: &str) -> R
         .new_context(&backend, ctx_params)
         .map_err(|e| format!("context: {e}"))?;
 
-    // A compact instruction prompt: ground the answer in the local history.
-    let prompt = format!(
-        "あなたは LiqMesh のオフライン AI アシスタントです。以下の近くのチャット履歴をふまえて、\
-         ユーザーの質問に日本語で簡潔に答えてください。\n\n\
-         === チャット履歴 ===\n{history}\n=== 質問 ===\n{question}\n=== 回答 ===\n"
-    );
+    // Build the prompt through LFM2's chat template (NOT a raw string). LFM2 is
+    // instruction-tuned on a ChatML-style format (`<|im_start|>role … <|im_end|>`
+    // with a `<|startoftext|>` BOS); feeding a bare instruction string makes the
+    // model ramble or ignore the turn boundaries. See [`build_chat_prompt`].
+    let prompt = build_chat_prompt(&model, question, history)?;
 
+    // The applied chat template ALREADY emits the model's BOS, so tokenize with
+    // AddBos::Never to avoid a duplicate leading BOS (which degrades output).
     let tokens = model
-        .str_to_token(&prompt, AddBos::Always)
+        .str_to_token(&prompt, AddBos::Never)
         .map_err(|e| format!("tokenize: {e}"))?;
 
     let mut batch = LlamaBatch::new(tokens.len().max(1), 1);
