@@ -2,14 +2,17 @@ type Props = {
   myName: string;
   onNameChange: (name: string) => void;
   onClearChat: () => void;
+  /** Load the 27-message disaster-mesh demo seed into general on demand. */
+  onLoadDemo: () => void;
   onClose: () => void;
 };
 
 /**
- * 設定 sheet (opened from the top-left ⚙️). Minimal parity with the mobile
- * settings: edit the display name and clear local chat history.
+ * 設定 sheet (opened from the top-left ⚙️): edit the display name, load the demo
+ * data on demand (for the disaster-mesh demo when general isn't empty), and
+ * clear local chat history.
  */
-export function SettingsDialog({ myName, onNameChange, onClearChat, onClose }: Props) {
+export function SettingsDialog({ myName, onNameChange, onClearChat, onLoadDemo, onClose }: Props) {
   return (
     <div className="sheet-overlay" role="dialog" aria-modal="true" aria-label="設定">
       <div className="sheet">
@@ -29,6 +32,21 @@ export function SettingsDialog({ myName, onNameChange, onClearChat, onClose }: P
             onChange={(e) => onNameChange(e.currentTarget.value)}
           />
         </label>
+
+        <div className="sheet-field">
+          <span className="sheet-label">デモデータ</span>
+          <button
+            className="btn-secondary"
+            onClick={() => {
+              if (confirm("デモ用の災害メッシュ会話 (27件) を general に投入しますか？")) {
+                onLoadDemo();
+                onClose();
+              }
+            }}
+          >
+            デモデータを投入
+          </button>
+        </div>
 
         <button
           className="btn-secondary sheet-danger"

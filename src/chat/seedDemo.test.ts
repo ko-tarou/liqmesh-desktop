@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { buildDemoSeed } from "./seedDemo";
+import { buildDemoSeed, demoSeedMessages } from "./seedDemo";
 import { DEFAULT_ROOM_ID } from "./frames";
 
 // Minimal in-memory localStorage so the seed's persisted flag works under the
@@ -48,5 +48,16 @@ describe("buildDemoSeed", () => {
   it("uses unique ids so the store dedup never collapses seeds", () => {
     const seeds = buildDemoSeed(1_749_200_000_000, false);
     expect(new Set(seeds.map((m) => m.id)).size).toBe(seeds.length);
+  });
+
+  it("demoSeedMessages is UNGATED — always returns the full set (on-demand button)", () => {
+    // Capture the canonical seed ids BEFORE setting the flag.
+    const canonical = demoSeedMessages(1_749_200_000_000).map((m) => m.id);
+    // Even with the flag set (auto-seed already ran), it still returns all of
+    // them — so the 設定 "デモデータを投入" button works regardless of prior state.
+    localStorage.setItem("liqmesh-demo-seeded", "1");
+    const again = demoSeedMessages(1_749_200_000_000);
+    expect(again.length).toBeGreaterThanOrEqual(20);
+    expect(again.map((m) => m.id)).toEqual(canonical); // stable ids → store dedups a repeat load
   });
 });
