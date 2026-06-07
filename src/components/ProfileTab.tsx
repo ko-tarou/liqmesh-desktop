@@ -1,3 +1,4 @@
+import { MessageCircle } from "lucide-react";
 import type { Peer } from "../chat/store";
 
 type Props = {
@@ -63,7 +64,7 @@ export function ProfileTab({ myId, myName, onNameChange, peers, onOpenChat }: Pr
                   </span>
                   <span className="acq-name">{a.name}</span>
                   <span className="acq-chat" aria-hidden>
-                    💬
+                    <MessageCircle size={18} />
                   </span>
                 </button>
               </li>

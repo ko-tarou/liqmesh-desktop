@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Users } from "lucide-react";
 import type { NearbyPeer } from "../chat/nearbyPeers";
 
 type Props = {
@@ -42,7 +43,7 @@ export function NearbyPeerBanner({ peer }: Props) {
       onClick={() => setShown(false)}
     >
       <span className="nearby-banner-icon" aria-hidden>
-        📡
+        <Users size={16} />
       </span>
       <span className="nearby-banner-text">
         近くに人がいます: <strong>{peer.senderName}</strong>

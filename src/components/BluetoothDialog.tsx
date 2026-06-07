@@ -1,3 +1,5 @@
+import { Bluetooth } from "lucide-react";
+
 type Props = {
   /** Optional technical reason from the Rust probe (shown small, secondary). */
   reason?: string | null;
@@ -15,14 +17,14 @@ export function BluetoothDialog({ reason, onRetry }: Props) {
     <div className="bt-overlay" role="dialog" aria-modal="true" aria-labelledby="bt-title">
       <div className="bt-dialog">
         <div className="bt-icon" aria-hidden="true">
-          ᯤ
+          <Bluetooth size={40} color="var(--brand)" />
         </div>
         <h2 id="bt-title" className="bt-title">
           Bluetoothを設定でオンにしてください
         </h2>
         <p className="bt-body">
           LiqMesh は近くの端末と直接つながるために Bluetooth を使います。
-          Windows の設定で Bluetooth をオンにしてから、再確認してください。
+          設定で Bluetooth をオンにしてから、再確認してください。
         </p>
         {reason && <p className="bt-reason">詳細: {reason}</p>}
         <button type="button" className="btn-primary bt-retry" onClick={onRetry}>
