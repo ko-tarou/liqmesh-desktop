@@ -1,4 +1,5 @@
 import "./App.css";
+import { useEffect } from "react";
 import { DEFAULT_ROOM_ID } from "./chat/frames";
 import { useChatStore } from "./chat/useChatStore";
 import { unreadCount } from "./chat/store";
@@ -33,6 +34,8 @@ function App() {
     error,
     peerId,
     nearbyPeer,
+    peerCount,
+    start,
     connect,
     disconnect,
     sendMessage,
@@ -41,13 +44,20 @@ function App() {
     sendRead,
   } = useBle();
 
+  // Room Model A: start the continuous multi-peer scan/connect supervisor as
+  // soon as we have an identity, so the app auto-discovers and connects to every
+  // nearby LiqMesh peer without a manual "Connect" — matching the phones.
+  useEffect(() => {
+    if (myId) void start(myId, myName);
+    // Re-run only when the identity changes; `start` is stable (useCallback).
+  }, [myId, myName, start]);
+
   // Room state (persisted) drives which conversation is shown. Subscribing to
   // `rooms` re-renders the switcher when a new room is discovered/added.
   const activeRoomId = useChatStore((s) => s.activeRoomId);
   const rooms = useChatStore((s) => s.rooms);
   const setActiveRoom = useChatStore((s) => s.setActiveRoom);
   const addRoom = useChatStore((s) => s.addRoom);
-  const peerNameOf = useChatStore((s) => s.peerName);
 
   // Subscribe to just the active room's messages; re-render only on changes.
   const messages = useChatStore((s) => s.messagesByRoom[activeRoomId] ?? EMPTY_MESSAGES);
@@ -71,7 +81,6 @@ function App() {
   }
 
   const connected = status === "connected";
-  const peerName = peerId ? peerNameOf(peerId) : undefined;
 
   const newestMessageId = messages.length > 0 ? messages[messages.length - 1].id : undefined;
 
@@ -108,7 +117,7 @@ function App() {
         myId={myId}
         myName={myName}
         status={status}
-        peerName={peerName}
+        peerCount={peerCount}
         onNameChange={setMyName}
         onConnect={() => connect(myId, myName)}
         onDisconnect={disconnect}

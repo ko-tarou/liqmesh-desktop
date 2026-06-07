@@ -50,6 +50,10 @@ export type UseBle = {
    * name reappears. `null` until the first new peer is seen.
    */
   nearbyPeer: (NearbyPeer & { key: number }) | null;
+  /** Number of distinct peers seen on this connection (Room Model A). */
+  peerCount: number;
+  /** Start the continuous multi-peer scan/connect supervisor (idempotent). */
+  start: (myId: string, myName: string) => Promise<void>;
   connect: (myId: string, myName: string) => Promise<void>;
   disconnect: () => Promise<void>;
   /** Optimistically store + send a chat message to the given room. */
@@ -84,6 +88,11 @@ export function useBle(): UseBle {
   const [stats, setStats] = useState<BleStats | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [peerId, setPeerId] = useState<string | null>(null);
+  // Room Model A: the set of currently-known peer ids (from hello frames). The
+  // supervisor connects to many peers at once, so presence is a count, not a
+  // single link. `peerCount` drives the UI's "N人接続中" indicator.
+  const [peerCount, setPeerCount] = useState(0);
+  const knownPeers = useRef<Set<string>>(new Set());
   const [nearbyPeer, setNearbyPeer] = useState<(NearbyPeer & { key: number }) | null>(null);
   // Ids we have already announced (deduped, one banner per newly-seen peer).
   // A ref (not state) so updating it never triggers a re-render on its own.
@@ -97,16 +106,21 @@ export function useBle(): UseBle {
   useEffect(() => {
     const subscriptions: Promise<UnlistenFn>[] = [
       listen("ble://connected", () => {
+        // A peer's link came up. With many peers, "connected" means ≥1 link;
+        // the precise count is tracked from hello frames below.
         setStatus("connected");
         setError(null);
       }),
       listen("ble://disconnected", () => {
-        setStatus("offline");
-        setPeerId(null);
+        // One peer dropped. The supervisor keeps scanning, so we stay in a
+        // "scanning/connected" posture rather than going fully offline; the peer
+        // count below reflects reality. (We can't tell which peer from this event
+        // today; a stale name lingers until its row is rebuilt — acceptable.)
+        setStatus("connected");
       }),
       listen("ble://error", (event) => {
-        setStatus("offline");
-        setPeerId(null);
+        // A single peer's setup/link failed. Surface it but do NOT tear the whole
+        // UI to offline — other peers and the continuous scan are unaffected.
         const p = event.payload as BleErrorPayload | null;
         setError(p ? `${p.kind}${p.message ? `: ${p.message}` : ""}` : "link error");
       }),
@@ -123,6 +137,11 @@ export function useBle(): UseBle {
         // `msg.senderId` here because that also echoes our own outgoing sends.
         if (frame.type === "hello") {
           setPeerId(frame.senderId);
+          // Track distinct connected peers for the "N人接続中" indicator.
+          if (!knownPeers.current.has(frame.senderId)) {
+            knownPeers.current.add(frame.senderId);
+            setPeerCount(knownPeers.current.size);
+          }
           // Pop the nearby-peer banner once per newly-seen peer.
           const peer = nearbyPeerToAnnounce(announcedPeerIds.current, frame);
           if (peer) {
@@ -141,9 +160,9 @@ export function useBle(): UseBle {
     };
   }, [applyFrame]);
 
-  const connect = useCallback(async (myId: string, myName: string) => {
+  const start = useCallback(async (myId: string, myName: string) => {
     setError(null);
-    setStatus("connecting");
+    setStatus("connecting"); // "scanning" posture until a peer's hello arrives
     try {
       await invoke("ble_start", { myId, myName });
     } catch (e) {
@@ -151,6 +170,10 @@ export function useBle(): UseBle {
       setError(String(e));
     }
   }, []);
+
+  // Back-compat alias: the old single-peer "Connect" entry point now just starts
+  // the continuous supervisor.
+  const connect = start;
 
   const disconnect = useCallback(async () => {
     try {
@@ -246,6 +269,8 @@ export function useBle(): UseBle {
     error,
     peerId,
     nearbyPeer,
+    peerCount,
+    start,
     connect,
     disconnect,
     sendMessage,
