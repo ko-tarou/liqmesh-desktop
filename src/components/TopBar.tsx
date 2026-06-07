@@ -1,9 +1,4 @@
-import AppBar from "@mui/material/AppBar";
-import Toolbar from "@mui/material/Toolbar";
-import Typography from "@mui/material/Typography";
-import IconButton from "@mui/material/IconButton";
-import SettingsIcon from "@mui/icons-material/Settings";
-import SearchIcon from "@mui/icons-material/Search";
+import { Settings, Search } from "lucide-react";
 
 type Props = {
   /** Center title = the current tab's name. */
@@ -13,27 +8,20 @@ type Props = {
 };
 
 /**
- * Persistent top bar (Material AppBar): left ⚙ 設定, centered title, right 🔍 検索.
- * Green primary background, white icons/title — matches the mobile scaffold.
+ * Persistent top bar: left ⚙ 設定, centered title, right 🔍 検索. Green primary
+ * background, white icons/title (themed via App.css `.top-bar`). Icons are
+ * lucide-react (crisp, lightweight) replacing the old emoji.
  */
 export function TopBar({ title, onSettings, onSearch }: Props) {
   return (
-    <AppBar position="static" color="primary" elevation={1}>
-      <Toolbar variant="dense">
-        <IconButton edge="start" color="inherit" aria-label="設定" onClick={onSettings}>
-          <SettingsIcon />
-        </IconButton>
-        <Typography
-          variant="h6"
-          component="h1"
-          sx={{ flex: 1, textAlign: "center", fontWeight: 600 }}
-        >
-          {title}
-        </Typography>
-        <IconButton edge="end" color="inherit" aria-label="検索" onClick={onSearch}>
-          <SearchIcon />
-        </IconButton>
-      </Toolbar>
-    </AppBar>
+    <header className="top-bar">
+      <button className="top-icon-btn" aria-label="設定" onClick={onSettings}>
+        <Settings size={20} aria-hidden />
+      </button>
+      <span className="top-title">{title}</span>
+      <button className="top-icon-btn" aria-label="検索" onClick={onSearch}>
+        <Search size={20} aria-hidden />
+      </button>
+    </header>
   );
 }

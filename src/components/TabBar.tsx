@@ -1,10 +1,4 @@
-import BottomNavigation from "@mui/material/BottomNavigation";
-import BottomNavigationAction from "@mui/material/BottomNavigationAction";
-import Badge from "@mui/material/Badge";
-import Paper from "@mui/material/Paper";
-import ChatIcon from "@mui/icons-material/Chat";
-import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
-import PersonIcon from "@mui/icons-material/Person";
+import { MessageCircle, Sparkles, User } from "lucide-react";
 
 export type RootTab = "chat" | "ai" | "profile";
 
@@ -15,30 +9,34 @@ type Props = {
   chatUnread?: number;
 };
 
-/**
- * Bottom tab bar (Material) matching the iOS/Android scaffold:
- * チャット / AI / プロフィール, with a Material Badge on チャット for unread.
- */
+/** Tabs in the unified mobile-UI order: チャット / AI / プロフィール (lucide icons). */
+const TABS: { id: RootTab; label: string; Icon: typeof MessageCircle }[] = [
+  { id: "chat", label: "チャット", Icon: MessageCircle },
+  { id: "ai", label: "AI", Icon: Sparkles },
+  { id: "profile", label: "プロフィール", Icon: User },
+];
+
+/** Bottom tab bar (チャット / AI / プロフィール), themed via App.css `.tab-bar`. */
 export function TabBar({ active, onSelect, chatUnread = 0 }: Props) {
   return (
-    <Paper elevation={3} square sx={{ flex: "0 0 auto" }}>
-      <BottomNavigation
-        showLabels
-        value={active}
-        onChange={(_, v) => onSelect(v as RootTab)}
-      >
-        <BottomNavigationAction
-          value="chat"
-          label="チャット"
-          icon={
-            <Badge badgeContent={chatUnread} color="error" max={99}>
-              <ChatIcon />
-            </Badge>
-          }
-        />
-        <BottomNavigationAction value="ai" label="AI" icon={<AutoAwesomeIcon />} />
-        <BottomNavigationAction value="profile" label="プロフィール" icon={<PersonIcon />} />
-      </BottomNavigation>
-    </Paper>
+    <nav className="tab-bar" role="tablist">
+      {TABS.map(({ id, label, Icon }) => (
+        <button
+          key={id}
+          role="tab"
+          aria-selected={active === id}
+          className={`tab-item${active === id ? " tab-item-active" : ""}`}
+          onClick={() => onSelect(id)}
+        >
+          <span className="tab-icon" aria-hidden>
+            <Icon size={22} />
+            {id === "chat" && chatUnread > 0 && (
+              <span className="tab-badge">{chatUnread > 99 ? "99+" : chatUnread}</span>
+            )}
+          </span>
+          <span className="tab-label">{label}</span>
+        </button>
+      ))}
+    </nav>
   );
 }
