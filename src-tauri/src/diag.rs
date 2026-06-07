@@ -105,9 +105,43 @@ pub fn hex(bytes: &[u8], max: usize) -> String {
     s
 }
 
+/// Describes a wire packet's chunk header for logging.
+///
+/// The wire framing (per `docs/BLE_CONTRACT.md` / `chunk.rs`) is
+/// `[msgId:4 BE][seq:1][total:1][payload…]`. This parses just those 6 header
+/// bytes so the receive log can show msgId/seq/total/payloadLen per chunk —
+/// the key signal for diagnosing a reassembly that never completes (e.g. a
+/// missing seq, a mismatched total, or a single chunk that never arrives).
+///
+/// Returns a `"<no chunk header: len=N>"` marker for a packet shorter than the
+/// 6-byte header rather than panicking (a malformed/short packet is itself a
+/// useful diagnostic).
+pub fn chunk_header(packet: &[u8]) -> String {
+    if packet.len() < 6 {
+        return format!("<no chunk header: len={}>", packet.len());
+    }
+    let msg_id = u32::from_be_bytes([packet[0], packet[1], packet[2], packet[3]]);
+    let seq = packet[4];
+    let total = packet[5];
+    let payload_len = packet.len() - 6;
+    format!("msgId={msg_id} seq={seq}/{total} payloadLen={payload_len}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chunk_header_parses_msgid_seq_total() {
+        // msgId=1 (BE), seq=2, total=5, 3 payload bytes.
+        let pkt = [0, 0, 0, 1, 2, 5, 0xaa, 0xbb, 0xcc];
+        assert_eq!(chunk_header(&pkt), "msgId=1 seq=2/5 payloadLen=3");
+    }
+
+    #[test]
+    fn chunk_header_marks_short_packet() {
+        assert_eq!(chunk_header(&[0, 0, 0]), "<no chunk header: len=3>");
+    }
 
     #[test]
     fn hex_renders_lowercase_and_caps() {
