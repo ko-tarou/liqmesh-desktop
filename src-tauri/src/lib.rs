@@ -14,6 +14,7 @@
 
 mod ai;
 mod ble;
+mod diag;
 
 use std::sync::Mutex;
 
@@ -83,6 +84,7 @@ fn emit_event(app: &AppHandle, ev: TransportEvent) {
         // `Frame` derives Serialize with the same camelCase wire shape the UI
         // already understands, so it is emitted as-is.
         TransportEvent::Frame(frame) => {
+            crate::diag::line(&format!("emit ble://frame → webview: {frame:?}"));
             let _ = app.emit("ble://frame", frame);
         }
         TransportEvent::Stats {
@@ -128,6 +130,9 @@ async fn ble_start(
     if my_id.trim().is_empty() {
         return Err("myId must not be empty".into());
     }
+    crate::diag::line(&format!(
+        "ble_start: myId={my_id} myName={my_name} — launching central supervisor"
+    ));
 
     let (out_tx, _out_rx0) = broadcast::channel::<Frame>(OUTBOUND_CAPACITY);
     let (ev_tx, mut ev_rx) = mpsc::channel::<TransportEvent>(EVENTS_CAPACITY);
@@ -174,11 +179,13 @@ async fn ble_start(
                 // displayed + relayed). New ids are inserted; repeats short-circuit.
                 if seen_msg_ids.insert(id.clone()) {
                     if let TransportEvent::Frame(frame) = &ev {
+                        crate::diag::line(&format!("relay: new msg id={id} → re-broadcast to peers"));
                         // broadcast::send errors only with zero receivers (no peers) — fine.
                         let _ = relay_tx.send(frame.clone());
                     }
                 } else {
                     // Duplicate arrival: don't re-display or re-relay.
+                    crate::diag::line(&format!("relay: dup msg id={id} → drop (no re-display)"));
                     continue;
                 }
             }
