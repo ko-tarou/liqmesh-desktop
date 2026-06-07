@@ -168,6 +168,11 @@ impl<L: GattLink, C: Fn() -> u64 + Send> Driver<L, C> {
                     let now = (self.clock)();
                     match self.session.on_packet(&pkt, now) {
                         Ok(Some(frame)) => {
+                            // Demo aid (tauri dev terminal): a packet reassembled
+                            // into a complete frame and is being delivered to the
+                            // UI. If a peer's msg never reaches here but its hello
+                            // does, the loss is in decode/reassembly above.
+                            eprintln!("[ble] recv frame → {frame:?}");
                             let _ = events.send(TransportEvent::Frame(frame)).await;
                         }
                         // Still reassembling, or the completed payload was
