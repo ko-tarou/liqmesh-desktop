@@ -21,7 +21,9 @@ export type MsgFrame = {
   senderId: string;
   senderName: string;
   body: string;
-  createdAt: string;
+  /** Epoch milliseconds (integer). The wire contract requires a number here —
+   * iOS (Int64) / Android (getLong) drop the frame on a string. */
+  createdAt: number;
   /** Absent/empty -> normalized to DEFAULT_ROOM_ID. */
   roomId?: string;
   replyToId?: string;

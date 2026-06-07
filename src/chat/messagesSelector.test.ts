@@ -48,7 +48,7 @@ describe("active-room messages selector (React #185 regression)", () => {
         senderId: "a",
         senderName: "A",
         body: "hi",
-        createdAt: "t",
+        createdAt: 1,
         roomId: "general",
         deleted: false,
         reactions: {},

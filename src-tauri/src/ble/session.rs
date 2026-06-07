@@ -319,7 +319,7 @@ mod tests {
             sender_id: "u1".into(),
             sender_name: "Alice".into(),
             body,
-            created_at: "2026-06-06T00:00:00Z".into(),
+            created_at: 1_749_168_000_000,
             room_id: "lobby".into(),
             reply_to_id: None,
         };
@@ -413,7 +413,7 @@ mod tests {
             sender_id: "u1".into(),
             sender_name: "Alice".into(),
             body: "x".repeat(1000),
-            created_at: "2026-06-06T00:00:00Z".into(),
+            created_at: 1_749_168_000_000,
             room_id: "lobby".into(),
             reply_to_id: None,
         };
@@ -510,7 +510,7 @@ mod tests {
             sender_id: sender_id.into(),
             sender_name: "X".into(),
             body: body.into(),
-            created_at: "t".into(),
+            created_at: 1,
             room_id: "lobby".into(),
             reply_to_id: None,
         }
@@ -635,7 +635,7 @@ mod tests {
             sender_id: "u1".into(),
             sender_name: "Alice".into(),
             body: "hello world".into(),
-            created_at: "t".into(),
+            created_at: 1,
             room_id: "lobby".into(),
             reply_to_id: None,
         };
