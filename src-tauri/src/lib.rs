@@ -20,29 +20,30 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::{mpsc, oneshot};
 
-use ble::central::{adapter_available, connect_and_run};
+use ble::central::{adapter_available, connect_and_run_multi};
 use ble::frame::Frame;
 use ble::transport::{LinkError, TransportEvent};
+use tokio::sync::broadcast;
 
-/// Channel capacity for app→link outbound frames. Small: the UI sends one frame
-/// per user action, so backpressure here is effectively never hit.
+/// Broadcast capacity for app→link outbound frames. In Room Model A a single
+/// send fans out to every connected peer; the capacity bounds how far a slow
+/// peer may lag before it drops missed frames.
 const OUTBOUND_CAPACITY: usize = 64;
 /// Channel capacity for link→app events.
 const EVENTS_CAPACITY: usize = 256;
 
-/// Shared Tauri state: the live link handles of the *current* connection.
+/// Shared Tauri state for the multi-peer BLE supervisor (Room Model A).
 ///
-/// - `outbound` — `ble_send` reads it to enqueue a frame; `ble_start`/`ble_stop`
-///   replace/clear it.
-/// - `shutdown` — the one-shot stop signal for the current connection. Firing it
-///   cancels the running `Driver::run` and forces a full teardown (see
-///   [`ble::central::connect_and_run`]). `ble_start` fires the *previous* one
-///   before creating a new connection so the old driver/notif/tick tasks and
-///   GATT link are guaranteed to wind down — dropping the outbound sender alone
-///   is not sufficient because the driver's tick interval never closes.
+/// - `outbound` — a broadcast sender; `ble_send` publishes one frame and every
+///   connected peer's task receives a clone (group fan-out). Present while the
+///   supervisor runs.
+/// - `shutdown` — the one-shot stop signal for the supervisor. Firing it cancels
+///   the continuous scan loop and, by dropping the broadcast sender it owns,
+///   winds every per-peer task down. `ble_start` fires the *previous* one before
+///   starting a fresh supervisor so nothing leaks across a restart.
 #[derive(Default)]
 struct BleState {
-    outbound: Mutex<Option<mpsc::Sender<Frame>>>,
+    outbound: Mutex<Option<broadcast::Sender<Frame>>>,
     shutdown: Mutex<Option<oneshot::Sender<()>>>,
 }
 
@@ -106,14 +107,16 @@ fn emit_event(app: &AppHandle, ev: TransportEvent) {
     }
 }
 
-/// Starts a BLE session: scans for a Contract peer, connects, and runs the
-/// transport driver, bridging its events to `ble://…` emits.
+/// Starts the multi-peer BLE supervisor (Room Model A): scan continuously,
+/// auto-connect to every LiqMesh peer, keep all links alive, and bridge their
+/// merged events to `ble://…` emits.
 ///
-/// A previous connection (if any) is **explicitly torn down first**: its stored
-/// `shutdown` sender is fired, which cancels the old `Driver::run` and disconnects
-/// the old GATT link + helper tasks (see [`ble::central::connect_and_run`]). Only
-/// then are the new outbound/shutdown handles installed. Returns once the
-/// background tasks are spawned; connection progress arrives via events.
+/// A previous supervisor (if any) is **explicitly torn down first**: its stored
+/// `shutdown` sender is fired, cancelling its scan loop and (by dropping the old
+/// broadcast sender) every per-peer task. Only then are the new outbound
+/// (broadcast) / shutdown handles installed. Returns once the background tasks
+/// are spawned; connection progress arrives via events. Idempotent to call on
+/// every UI mount.
 #[tauri::command]
 async fn ble_start(
     app: AppHandle,
@@ -125,12 +128,13 @@ async fn ble_start(
         return Err("myId must not be empty".into());
     }
 
-    let (out_tx, out_rx) = mpsc::channel::<Frame>(OUTBOUND_CAPACITY);
+    let (out_tx, _out_rx0) = broadcast::channel::<Frame>(OUTBOUND_CAPACITY);
     let (ev_tx, mut ev_rx) = mpsc::channel::<TransportEvent>(EVENTS_CAPACITY);
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
-    // Stop any prior connection (cancels its driver → full teardown), then
-    // install the new link's handles.
+    // Stop any prior supervisor (cancels its scan + per-peer tasks), then install
+    // the new handles. The broadcast sender is cloned into the supervisor; the
+    // copy stored here is what `ble_send` publishes to.
     {
         let mut shutdown_guard = state
             .shutdown
@@ -145,10 +149,10 @@ async fn ble_start(
             .outbound
             .lock()
             .map_err(|_| "BLE state lock poisoned".to_string())?;
-        *out_guard = Some(out_tx);
+        *out_guard = Some(out_tx.clone());
     }
 
-    // Bridge driver events → webview.
+    // Bridge merged per-peer events → webview.
     let app_for_events = app.clone();
     tokio::spawn(async move {
         while let Some(ev) = ev_rx.recv().await {
@@ -156,8 +160,9 @@ async fn ble_start(
         }
     });
 
-    // Run the connection. It owns `out_rx`/`ev_tx`/`shutdown_rx` for its lifetime.
-    tokio::spawn(connect_and_run(my_id, my_name, ev_tx, out_rx, shutdown_rx));
+    // Run the supervisor. It owns `out_tx` (for per-peer subscriptions), `ev_tx`,
+    // and `shutdown_rx` for its lifetime.
+    tokio::spawn(connect_and_run_multi(my_id, my_name, ev_tx, out_tx, shutdown_rx));
 
     Ok(())
 }
@@ -189,9 +194,13 @@ async fn ble_stop(state: State<'_, BleState>) -> Result<(), String> {
     Ok(())
 }
 
-/// Enqueues one frame (parsed strictly from JSON) onto the current connection.
+/// Broadcasts one frame (parsed strictly from JSON) to every connected peer
+/// (Room Model A group fan-out).
 ///
-/// Fails if the JSON is not a valid [`Frame`] or if no connection is active.
+/// Fails if the JSON is not a valid [`Frame`] or if the supervisor is not
+/// running. A successful publish with **no peers yet connected** is not an error
+/// (the optimistic local echo already showed the message); it simply reaches
+/// zero links.
 #[tauri::command]
 async fn ble_send(state: State<'_, BleState>, frame_json: String) -> Result<(), String> {
     let frame: Frame =
@@ -205,11 +214,13 @@ async fn ble_send(state: State<'_, BleState>, frame_json: String) -> Result<(), 
         guard.clone()
     };
     match sender {
-        Some(tx) => tx
-            .send(frame)
-            .await
-            .map_err(|_| "no active BLE connection (link closed)".to_string()),
-        None => Err("no active BLE connection".into()),
+        // `broadcast::send` errors only when there are no receivers. With Room
+        // Model A that just means no peers are connected yet — not a failure.
+        Some(tx) => {
+            let _ = tx.send(frame);
+            Ok(())
+        }
+        None => Err("BLE supervisor not running".into()),
     }
 }
 

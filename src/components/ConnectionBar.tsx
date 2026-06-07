@@ -4,17 +4,18 @@ type Props = {
   myId: string;
   myName: string;
   status: BleStatus;
-  /** Display name of the connected peer, if known (presence). */
-  peerName?: string;
+  /** Number of distinct peers connected (Room Model A group). */
+  peerCount: number;
   onNameChange: (name: string) => void;
   onConnect: () => void;
   onDisconnect: () => void;
 };
 
 const STATUS_LABEL: Record<BleStatus, string> = {
-  offline: "offline",
-  connecting: "connecting…",
-  connected: "connected",
+  offline: "オフライン",
+  // Room Model A: we scan continuously, so "connecting" reads as "searching".
+  connecting: "検索中…",
+  connected: "接続中",
 };
 
 /** Short, human-scannable form of the device id. */
@@ -26,13 +27,12 @@ export function ConnectionBar({
   myId,
   myName,
   status,
-  peerName,
+  peerCount,
   onNameChange,
   onConnect,
   onDisconnect,
 }: Props) {
   const isOffline = status === "offline";
-  const showPeer = status === "connected" && peerName;
 
   return (
     <header className="conn-bar">
@@ -51,19 +51,21 @@ export function ConnectionBar({
           value={myName}
           onChange={(e) => onNameChange(e.currentTarget.value)}
         />
+        {/* Room Model A auto-scans on launch; expose a manual re-scan only when
+            offline (e.g. the supervisor errored), and a stop otherwise. */}
         {isOffline ? (
           <button className="btn-primary" onClick={onConnect}>
-            Connect
+            再スキャン
           </button>
         ) : (
           <button className="btn-secondary" onClick={onDisconnect}>
-            Disconnect
+            停止
           </button>
         )}
         <span className={`conn-status status-${status}`}>
           <span className="status-dot" aria-hidden="true" />
           {STATUS_LABEL[status]}
-          {showPeer && <span className="conn-peer"> · {peerName}</span>}
+          {peerCount > 0 && <span className="conn-peer"> · {peerCount}人接続中</span>}
         </span>
       </div>
     </header>

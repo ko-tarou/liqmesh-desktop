@@ -29,7 +29,7 @@ use btleplug::api::{
 };
 use btleplug::platform::{Adapter, Manager, Peripheral};
 use futures::StreamExt;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use uuid::Uuid;
 
 use super::frame::Frame;
@@ -163,6 +163,168 @@ async fn scan_for_peer(adapter: &Adapter) -> Result<Peripheral, String> {
     }
 }
 
+/// How often the multi-peer supervisor re-polls the adapter for newly-arrived
+/// peripherals. The scan is left running continuously; this only bounds how
+/// quickly a freshly-advertised peer is noticed.
+const MULTI_SCAN_POLL_INTERVAL: Duration = Duration::from_millis(800);
+
+/// Continuous multi-peer supervisor (Room Model A): scan forever and
+/// auto-connect to EVERY discovered LiqMesh peer, keeping all links alive at
+/// once. Each connected peer runs its own [`run_peer`] task; inbound frames from
+/// all peers fan into the single shared `events` stream (so the UI sees one
+/// merged feed), and outbound frames are broadcast to every live link via
+/// `outbound_tx`.
+///
+/// Unlike [`connect_and_run`] (single peer, stops after one connect), this never
+/// stops scanning, so peers that appear later are picked up automatically and
+/// peers that drop are re-connected on their next advertisement. `shutdown`
+/// cancels the whole supervisor (and, by dropping the broadcast sender, every
+/// per-peer task).
+pub async fn connect_and_run_multi(
+    my_id: String,
+    my_name: String,
+    events: mpsc::Sender<TransportEvent>,
+    outbound_tx: broadcast::Sender<Frame>,
+    shutdown: oneshot::Receiver<()>,
+) {
+    let manager = match Manager::new().await {
+        Ok(m) => m,
+        Err(e) => return report_io(&events, format!("Manager::new failed: {e}")).await,
+    };
+    let adapter = match manager.adapters().await {
+        Ok(mut a) if !a.is_empty() => a.remove(0),
+        Ok(_) => return report_io(&events, "no Bluetooth adapter found").await,
+        Err(e) => return report_io(&events, format!("adapters() failed: {e}")).await,
+    };
+    if let Err(e) = adapter
+        .start_scan(ScanFilter { services: vec![SERVICE_UUID] })
+        .await
+    {
+        return report_io(&events, format!("start_scan failed: {e}")).await;
+    }
+
+    // Peripheral ids we already have a live (or in-flight) task for, so the poll
+    // loop never double-connects the same peer.
+    let mut connected: std::collections::HashSet<String> = std::collections::HashSet::new();
+    tokio::pin!(shutdown);
+
+    loop {
+        tokio::select! {
+            // External stop: end the supervisor. Dropping `outbound_tx` (held
+            // only here) closes every per-peer broadcast receiver, winding the
+            // spawned tasks down; the scan is stopped on the way out.
+            _ = &mut shutdown => break,
+            _ = tokio::time::sleep(MULTI_SCAN_POLL_INTERVAL) => {
+                let found = match adapter.peripherals().await {
+                    Ok(f) => f,
+                    Err(_) => continue, // transient; try again next tick
+                };
+                for p in found {
+                    let id = p.id().to_string();
+                    if connected.contains(&id) {
+                        continue;
+                    }
+                    if !peripheral_matches(&p).await {
+                        continue;
+                    }
+                    connected.insert(id);
+                    // Spawn an independent transport task for this peer. It owns
+                    // its own broadcast receiver (outbound fan-out) and shares
+                    // the single events sender (inbound fan-in).
+                    let ev = events.clone();
+                    let out_rx = outbound_tx.subscribe();
+                    let (my_id, my_name) = (my_id.clone(), my_name.clone());
+                    tokio::spawn(run_peer(p, my_id, my_name, ev, out_rx));
+                }
+            }
+        }
+    }
+
+    let _ = adapter.stop_scan().await;
+}
+
+/// Runs one already-discovered peer to completion: connect, resolve chars,
+/// subscribe to RX, and drive the [`Driver`] until the link drops. Outbound
+/// frames arrive over a [`broadcast::Receiver`] shared with every other peer
+/// (Room Model A: one group message goes to all connected peers); they are
+/// forwarded into the driver's mpsc `outbound`. A `broadcast` lag (slow peer)
+/// is skipped rather than killing the link.
+async fn run_peer(
+    peripheral: Peripheral,
+    my_id: String,
+    my_name: String,
+    events: mpsc::Sender<TransportEvent>,
+    mut outbound_rx: broadcast::Receiver<Frame>,
+) {
+    let (tx_char, rx_char) = match connect_and_resolve_chars(&peripheral).await {
+        Ok(pair) => pair,
+        Err(e) => return report_io(&events, e).await,
+    };
+
+    let mut notif_stream = match peripheral.notifications().await {
+        Ok(s) => s,
+        Err(e) => return report_io(&events, format!("notifications() failed: {e}")).await,
+    };
+    if let Err(e) = peripheral.subscribe(&rx_char).await {
+        return report_io(&events, format!("subscribe(RX) failed: {e}")).await;
+    }
+
+    let (inbound_tx, inbound_rx) = mpsc::channel::<Vec<u8>>(CHANNEL_CAPACITY);
+    let rx_uuid = rx_char.uuid;
+    let notif_task = tokio::spawn(async move {
+        while let Some(n) = notif_stream.next().await {
+            if n.uuid == rx_uuid && inbound_tx.send(n.value).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    // Adapt the shared broadcast receiver to the driver's mpsc `outbound`.
+    let (out_tx, out_rx) = mpsc::channel::<Frame>(CHANNEL_CAPACITY);
+    let fanout_task = tokio::spawn(async move {
+        loop {
+            match outbound_rx.recv().await {
+                Ok(frame) => {
+                    if out_tx.send(frame).await.is_err() {
+                        break; // driver gone
+                    }
+                }
+                // Lagged behind a burst: skip the missed frames and keep going.
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                // All senders dropped (supervisor shut down): end the task.
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+
+    let start = Instant::now();
+    let clock = move || start.elapsed().as_millis() as u64;
+    let (tick_tx, tick_rx) = mpsc::channel::<()>(CHANNEL_CAPACITY);
+    let tick_task = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(TICK_INTERVAL);
+        interval.tick().await; // skip the immediate first tick
+        loop {
+            interval.tick().await;
+            if tick_tx.send(()).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    let session = Session::new(my_id, my_name);
+    let link = BtleLink {
+        peripheral: peripheral.clone(),
+        tx_char,
+    };
+    let driver = Driver::new(session, link, clock);
+    driver.run(inbound_rx, out_rx, tick_rx, events).await;
+
+    notif_task.abort();
+    fanout_task.abort();
+    tick_task.abort();
+    let _ = peripheral.disconnect().await;
+}
+
 /// Connects to `peripheral`, discovers its services, and resolves the TX/RX
 /// characteristics. Returns `(tx_char, rx_char)` on success.
 async fn connect_and_resolve_chars(
@@ -199,6 +361,10 @@ async fn connect_and_resolve_chars(
 
 /// Scans, connects, and runs the BLE transport [`Driver`] for one peer until the
 /// link drops or the `outbound` channel closes.
+///
+/// NOTE: superseded by [`connect_and_run_multi`] (Room Model A, continuous
+/// multi-peer). Retained as the single-peer reference implementation; the app no
+/// longer wires it.
 ///
 /// All inputs/outputs are channels so the Tauri layer never sees btleplug types:
 /// - `events`   — driver/connection events out to Tauri (`ble://…`).
