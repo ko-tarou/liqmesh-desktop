@@ -36,6 +36,13 @@ pub const DEFAULT_MTU: usize = 247;
 /// across versions.
 pub const PROTO_VER: u32 = 1;
 
+/// Reserved sender id for AI-authored messages (mirrors iOS `aiSenderID` /
+/// Android `AI_SENDER_ID` = `"ai"`). A relayed `msg` legitimately carries the
+/// ORIGINAL author's senderId (not the connected peer's), so multi-hop requires
+/// relaxing the per-peer TOFU check for `msg` frames — but a peer must never be
+/// allowed to impersonate the AI, so a `msg` claiming this id is still dropped.
+pub const AI_SENDER_ID: &str = "ai";
+
 /// How long (ms) a partial reassembly may sit idle before
 /// [`Session::evict_expired`] reaps it. Bounds memory against a peer that starts
 /// a chunked message and never finishes it. PR-B2b feeds a monotonic clock.
@@ -251,8 +258,23 @@ impl Session {
                 self.incompatible_proto += 1;
                 Ok(None)
             }
-            // Known, compatible frame: enforce trust-on-first-use binding of the
-            // peer's senderId before delivering it (anti-impersonation).
+            // A `msg` is relay-exempt from the per-peer TOFU check: in a multi-hop
+            // mesh it legitimately carries the ORIGINAL author's senderId, not the
+            // connected peer's, so binding/rejecting by peer id would kill relayed
+            // hops. We still drop a `msg` that claims the reserved AI id (a peer
+            // must not impersonate the AI), and we still record the peer binding
+            // from a `msg` when nothing is bound yet (best-effort presence), but we
+            // never REJECT a `msg` for a sender mismatch.
+            Some(frame @ Frame::Msg { .. }) => {
+                if frame_sender_id(&frame) == Some(AI_SENDER_ID) {
+                    self.impersonation_rejections += 1;
+                    return Ok(None);
+                }
+                Ok(Some(frame.normalized()))
+            }
+            // Other known, compatible frames (hello / reaction / delete / read):
+            // enforce trust-on-first-use binding of the peer's senderId before
+            // delivering (anti-impersonation, tied to the directly-connected peer).
             Some(frame) => {
                 match (frame_sender_id(&frame), self.peer_id.as_deref()) {
                     // First identified frame: bind the connection to this sender.
@@ -548,7 +570,7 @@ mod tests {
     }
 
     #[test]
-    fn mismatched_sender_is_rejected_as_impersonation() {
+    fn mismatched_sender_reaction_is_rejected_as_impersonation() {
         let mut rx = session("me", "Me");
         // First bind to u1 via hello.
         let mut tx1 = session("u1", "U1");
@@ -556,41 +578,76 @@ mod tests {
         assert!(feed(&mut rx, &hp).is_some());
         assert_eq!(rx.peer_id(), Some("u1"));
 
-        // A msg claiming senderId u2 over the same connection is an impostor.
+        // A NON-msg frame (reaction) claiming u2 over the u1 connection is still
+        // an impostor — TOFU stays strict for reaction/delete/read.
         let mut tx2 = session("u2", "U2");
-        let imposter = msg_from("u2", "spoof");
-        let ip = tx2.encode_frame(&imposter).expect("msg");
-        assert_eq!(feed(&mut rx, &ip), None, "impersonation dropped");
+        let imposter = Frame::Reaction {
+            message_id: "m1".into(),
+            sender_id: "u2".into(),
+            emoji: "👍".into(),
+            op: "add".into(),
+        };
+        let ip = tx2.encode_frame(&imposter).expect("reaction");
+        assert_eq!(feed(&mut rx, &ip), None, "reaction impersonation dropped");
         assert_eq!(rx.impersonation_rejections(), 1);
         assert_eq!(rx.peer_id(), Some("u1"), "binding stays on u1");
     }
 
     #[test]
-    fn first_frame_can_be_non_hello_and_binds() {
-        // TOFU binds on the first *known* frame carrying a senderId, not only on
-        // hello (a msg arriving first must still establish the binding).
+    fn mismatched_sender_msg_is_accepted_for_relay() {
+        // Multi-hop: a relayed `msg` carries the ORIGINAL author's senderId, not
+        // the connected peer's. After binding to u1 via hello, a msg claiming u2
+        // must be DELIVERED (not rejected) so relayed hops survive.
+        let mut rx = session("me", "Me");
+        let mut tx1 = session("u1", "U1");
+        let hp = tx1.encode_frame(&tx1.hello_frame()).expect("hello");
+        assert!(feed(&mut rx, &hp).is_some());
+
+        let mut tx2 = session("u2", "U2");
+        let relayed = msg_from("u2", "hello from afar");
+        let mp = tx2.encode_frame(&relayed).expect("msg");
+        assert_eq!(feed(&mut rx, &mp), Some(relayed), "relayed msg accepted");
+        assert_eq!(rx.impersonation_rejections(), 0);
+        assert_eq!(rx.peer_id(), Some("u1"), "binding stays on the real peer u1");
+    }
+
+    #[test]
+    fn msg_claiming_reserved_ai_sender_is_dropped() {
+        // A peer must never impersonate the AI, even via the relay-relaxed path.
+        let mut rx = session("me", "Me");
+        let mut tx = session("u1", "U1");
+        let fake_ai = msg_from(AI_SENDER_ID, "I am the AI");
+        let mp = tx.encode_frame(&fake_ai).expect("msg");
+        assert_eq!(feed(&mut rx, &mp), None, "fake-AI msg dropped");
+        assert_eq!(rx.impersonation_rejections(), 1);
+    }
+
+    #[test]
+    fn first_msg_does_not_bind_peer_id() {
+        // A `msg` no longer establishes the TOFU binding (it may be a relayed
+        // frame from a far author). Only hello binds the connection identity.
         let mut rx = session("me", "Me");
         let msg = msg_from("u1", "hi");
         let mut tx = session("u1", "U1");
         let mp = tx.encode_frame(&msg).expect("msg");
-        assert_eq!(feed(&mut rx, &mp), Some(msg));
-        assert_eq!(rx.peer_id(), Some("u1"));
+        assert_eq!(feed(&mut rx, &mp), Some(msg), "msg still delivered");
+        assert_eq!(rx.peer_id(), None, "msg does not bind peer_id");
     }
 
     #[test]
     fn incompatible_hello_does_not_bind_then_valid_sender_binds() {
         // proto check precedes TOFU: an incompatible hello must NOT bind, so a
-        // subsequent compatible frame from a *different* sender binds cleanly.
+        // subsequent compatible HELLO from a *different* sender binds cleanly.
+        // (Binding is established by hello; msg is relay-exempt and never binds.)
         let mut rx = session("me", "Me");
         let bad = hello_packets("u9", 2);
         assert_eq!(feed(&mut rx, &bad), None);
         assert_eq!(rx.peer_id(), None, "incompatible hello must not bind");
         assert_eq!(rx.incompatible_proto(), 1);
 
-        let msg = msg_from("u1", "hi");
         let mut tx = session("u1", "U1");
-        let mp = tx.encode_frame(&msg).expect("msg");
-        assert_eq!(feed(&mut rx, &mp), Some(msg));
+        let hp = tx.encode_frame(&tx.hello_frame()).expect("hello");
+        assert!(feed(&mut rx, &hp).is_some());
         assert_eq!(rx.peer_id(), Some("u1"));
     }
 
