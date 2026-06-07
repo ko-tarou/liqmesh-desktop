@@ -335,14 +335,19 @@ async fn run_peer(
         while let Some(n) = notif_stream.next().await {
             // Log EVERY notification, even ones on a different characteristic, so
             // a wrong-char write from the peer is visible rather than silently
-            // dropped by the `uuid` filter below.
+            // dropped by the `uuid` filter below. Include the chunk header
+            // (msgId/seq/total) so a partial reassembly is diagnosable from the
+            // log, and whether this packet PASSED or was DROPPED by the filter.
+            let passes = n.uuid == rx_uuid;
             crate::diag::line(&format!(
-                "peer id={notif_peer} notify char={} len={} bytes={}",
+                "peer id={notif_peer} notify char={} {} filter={} len={} bytes={}",
                 n.uuid,
+                crate::diag::chunk_header(&n.value),
+                if passes { "PASS(RX …0003)" } else { "DROP(non-RX char)" },
                 n.value.len(),
                 crate::diag::hex(&n.value, 64)
             ));
-            if n.uuid == rx_uuid && inbound_tx.send(n.value).await.is_err() {
+            if passes && inbound_tx.send(n.value).await.is_err() {
                 break;
             }
         }

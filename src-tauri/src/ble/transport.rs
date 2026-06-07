@@ -168,7 +168,8 @@ impl<L: GattLink, C: Fn() -> u64 + Send> Driver<L, C> {
                 Some(pkt) = inbound.recv() => {
                     let now = (self.clock)();
                     crate::diag::line(&format!(
-                        "rx packet len={} bytes={}",
+                        "rx chunk into reassembler: {} len={} bytes={}",
+                        crate::diag::chunk_header(&pkt),
                         pkt.len(),
                         crate::diag::hex(&pkt, 64)
                     ));
@@ -179,7 +180,9 @@ impl<L: GattLink, C: Fn() -> u64 + Send> Driver<L, C> {
                             // UI. If a peer's msg never reaches here but its hello
                             // does, the loss is in decode/reassembly above.
                             eprintln!("[ble] recv frame → {frame:?}");
-                            crate::diag::line(&format!("rx → DELIVER frame: {frame:?}"));
+                            crate::diag::line(&format!(
+                                "rx → FRAME ASSEMBLED + decoded → DELIVER: {frame:?}"
+                            ));
                             let _ = events.send(TransportEvent::Frame(frame)).await;
                         }
                         // Still reassembling, or the completed payload was
