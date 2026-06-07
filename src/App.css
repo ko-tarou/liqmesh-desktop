@@ -55,26 +55,30 @@ body {
   align-items: center;
   justify-content: space-between;
   padding: 10px 16px;
-  border-bottom: 1px solid var(--panel-border);
-  background: var(--panel);
+  background: var(--brand); /* green primary AppBar (matches iOS/Android) */
+  color: var(--brand-ink); /* white title + icons */
   flex: 0 0 auto;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
 }
 .top-title {
-  font-size: 1rem;
+  font-size: 1.05rem;
   font-weight: 600;
-  color: var(--text);
+  color: var(--brand-ink);
 }
 .top-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: none;
   border: none;
-  font-size: 1.1rem;
+  color: var(--brand-ink); /* lucide icons inherit currentColor → white */
   cursor: pointer;
-  padding: 4px 8px;
-  border-radius: 8px;
+  padding: 6px;
+  border-radius: 999px;
   line-height: 1;
 }
 .top-icon-btn:hover {
-  background: var(--panel-2);
+  background: rgba(255, 255, 255, 0.18);
 }
 
 .tab-content {

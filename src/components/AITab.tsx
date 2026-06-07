@@ -1,5 +1,5 @@
 import { useState } from "react";
-import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
+import { Sparkles } from "lucide-react";
 import { useAI } from "../chat/useAI";
 import type { Message } from "../chat/store";
 
@@ -37,7 +37,7 @@ export function AITab({ messages }: Props) {
   return (
     <div className="ai-tab-full">
       <div className="ai-head">
-        <AutoAwesomeIcon className="ai-icon" color="primary" aria-hidden />
+        <Sparkles className="ai-icon" color="var(--brand)" aria-hidden />
         <div>
           <p className="ai-title">オンデバイス AI</p>
           <p className="ai-sub">端末内の LFM2-350M がチャット履歴に答えます（完全オフライン）。</p>
