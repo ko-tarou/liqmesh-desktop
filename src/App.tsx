@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { DEFAULT_ROOM_ID } from "./chat/frames";
 import { useChatStore } from "./chat/useChatStore";
 import { unreadCount } from "./chat/store";
-import { buildDemoSeed } from "./chat/seedDemo";
+import { buildDemoSeed, demoSeedMessages } from "./chat/seedDemo";
 import { useIdentity } from "./chat/useIdentity";
 import { useBle } from "./chat/useBle";
 import { useReadReceipts } from "./chat/useReadReceipts";
@@ -209,6 +209,13 @@ function App() {
           onClearChat={() => {
             clearChat();
             setShowSettings(false);
+          }}
+          onLoadDemo={() => {
+            // On-demand demo seed (stable ids → store dedups a repeat load).
+            for (const m of demoSeedMessages(Date.now())) {
+              const { deleted: _d, reactions: _r, ...rest } = m;
+              addLocalMessage(rest);
+            }
           }}
           onClose={() => setShowSettings(false)}
         />

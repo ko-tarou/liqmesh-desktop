@@ -61,17 +61,12 @@ const SCRIPT: Seed[] = [
 ];
 
 /**
- * Returns the seed messages stamped relative to `now` (epoch ms), or `[]` if the
- * seed has already run / should not run. Side-effect: sets the persisted flag.
- *
- * `roomHasMessages` lets the caller pass the current general-room length so we
- * never seed over real content.
+ * The 27 demo messages stamped relative to `now` (epoch ms) — UNGATED. Used by
+ * the on-demand "デモデータを投入" button in 設定 (the owner's general is rarely
+ * empty after earlier runs, so the auto-seed won't fire). Stable ids mean
+ * inserting twice is deduped by the store rather than duplicated.
  */
-export function buildDemoSeed(now: number, roomHasMessages: boolean): Message[] {
-  if (roomHasMessages) return [];
-  if (localStorage.getItem(SEED_FLAG)) return [];
-  localStorage.setItem(SEED_FLAG, "1");
-
+export function demoSeedMessages(now: number): Message[] {
   return SCRIPT.map((s, i) => ({
     id: `seed-${i}`,
     senderId: senderId(s.sender),
@@ -82,4 +77,18 @@ export function buildDemoSeed(now: number, roomHasMessages: boolean): Message[] 
     deleted: false,
     reactions: {},
   }));
+}
+
+/**
+ * Returns the seed messages stamped relative to `now` (epoch ms), or `[]` if the
+ * seed has already run / should not run. Side-effect: sets the persisted flag.
+ *
+ * `roomHasMessages` lets the caller pass the current general-room length so we
+ * never seed over real content. (Auto-seed path — first launch only.)
+ */
+export function buildDemoSeed(now: number, roomHasMessages: boolean): Message[] {
+  if (roomHasMessages) return [];
+  if (localStorage.getItem(SEED_FLAG)) return [];
+  localStorage.setItem(SEED_FLAG, "1");
+  return demoSeedMessages(now);
 }
